@@ -1,0 +1,11 @@
+data/
+nemo_experiments/
+logs/
+outputs/
+*.nemo
+*.ckpt
+*.pt
+*.tar.gz
+__pycache__/
+*.pyc
+.git/

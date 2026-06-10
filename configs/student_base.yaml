@@ -1,0 +1,140 @@
+name: "student-conformer-144x8-1024"
+
+model:
+  sample_rate: 16000
+  log_prediction: false
+  ctc_reduction: "mean_batch"
+
+  kd_mode: "none"       # none | trans | logit
+  kd_weight: 0.0
+  logit_kd_temperature: 2.0
+
+  train_ds:
+    manifest_filepath: "data/train_clean_100.json"
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: true
+    num_workers: 8
+    pin_memory: true
+
+  validation_ds:
+    manifest_filepath: "data/dev_clean.json"
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    num_workers: 8
+    pin_memory: true
+
+  test_ds:
+    - name: "dev_clean"
+      manifest_filepath: "data/dev_clean.json"
+      sample_rate: 16000
+      batch_size: 32
+      shuffle: false
+      num_workers: 8
+      pin_memory: true
+    - name: "dev_other"
+      manifest_filepath: "data/dev_other.json"
+      sample_rate: 16000
+      batch_size: 32
+      shuffle: false
+      num_workers: 8
+      pin_memory: true
+    - name: "test_clean"
+      manifest_filepath: "data/test_clean.json"
+      sample_rate: 16000
+      batch_size: 32
+      shuffle: false
+      num_workers: 8
+      pin_memory: true
+    - name: "test_other"
+      manifest_filepath: "data/test_other.json"
+      sample_rate: 16000
+      batch_size: 32
+      shuffle: false
+      num_workers: 8
+      pin_memory: true
+
+  tokenizer:
+    dir: "tokenizer_1024"
+    type: "bpe"
+
+  preprocessor:
+    _target_: nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor
+    sample_rate: 16000
+    normalize: "per_feature"
+    window_size: 0.025
+    window_stride: 0.01
+    features: 80
+    n_fft: 512
+    pad_to: 0
+
+  spec_augment:
+    _target_: nemo.collections.asr.modules.SpectrogramAugmentation
+    freq_masks: 2
+    time_masks: 10
+    freq_width: 27
+    time_width: 0.05
+
+  encoder:
+    _target_: nemo.collections.asr.modules.ConformerEncoder
+    feat_in: 80
+    n_layers: 8
+    d_model: 144
+    subsampling: striding
+    subsampling_factor: 4
+    subsampling_conv_channels: 144
+    ff_expansion_factor: 4
+    self_attention_model: rel_pos
+    n_heads: 4
+    att_context_size: [-1, -1]
+    conv_kernel_size: 31
+    dropout: 0.1
+    dropout_emb: 0.0
+    dropout_att: 0.1
+
+  decoder:
+    _target_: nemo.collections.asr.modules.ConvASRDecoder
+    feat_in: 144
+    num_classes: -1
+    vocabulary: []
+
+  optim:
+    name: adamw
+    lr: 2.0  # Noam scaled: effective peak = lr × d_model^-0.5 × warmup^-0.5 ≈ 1.67e-3
+    betas: [0.9, 0.98]
+    weight_decay: 1e-3
+    sched:
+      name: NoamAnnealing
+      d_model: 144
+      # warmup_steps scaled for effective batch 64 (batch_size 32 × accumulate 2):
+      # original 10000 steps @ batch 16  →  2500 steps @ batch 64  (same samples seen)
+      warmup_steps: 2500
+      min_lr: 1e-5
+
+trainer:
+  devices: 1
+  accelerator: gpu
+  max_epochs: 100
+  precision: bf16-mixed
+  log_every_n_steps: 50
+  val_check_interval: 1.0
+  enable_checkpointing: false
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 2  # effective batch = 32 × 2 = 64
+
+exp_manager:
+  exp_dir: "nemo_experiments"
+  name: "student-conformer-144x8-1024"
+  create_wandb_logger: true
+  wandb_logger_kwargs:
+    project: "transition-aware-kd"
+    name: "student-conformer-144x8-1024"
+  create_checkpoint_callback: true
+  checkpoint_callback_params:
+    monitor: "val_wer"
+    mode: "min"
+    save_top_k: 3
+    save_last: true
+  resume_if_exists: false
+  resume_ignore_no_checkpoint: true

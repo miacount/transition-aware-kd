@@ -1,0 +1,20 @@
+# data & model artifacts (never commit large files)
+data/
+*.nemo
+*.ckpt
+*.pt
+*.tar.gz
+nemo_experiments/
+logs/
+lightning_logs/
+outputs/
+
+# workspace artifacts
+CLEANUP_MANIFEST.txt
+analysis/
+
+# python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/

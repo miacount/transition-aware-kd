@@ -1,0 +1,5 @@
+# Most dependencies come from the NeMo base image (torch, nemo_toolkit,
+# pytorch-lightning, hydra-core, omegaconf, ...). Only add project-specific
+# extras here.
+jiwer>=3.0        # WER / CER computation for evaluation
+wandb       # training curves (NeMo logs to it)
