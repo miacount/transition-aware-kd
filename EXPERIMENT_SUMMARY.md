@@ -62,9 +62,9 @@ bash experiments/presets/21_vanilla_logit_kd_w01.sh
 
 | Run | KD | dev_clean | dev_other | test_clean | test_other | 비고 |
 |---|---|---:|---:|---:|---:|---|
-| TBD | none | - | - | - | - | cleanup 이후 재실험 필요 |
-| TBD | transition | - | - | - | - | cleanup 이후 재실험 필요 |
-| TBD | logit | - | - | - | - | cleanup 이후 재실험 필요 |
+| student-none-144x8-1024-clean (epoch 98) | none | 14.69% | 33.58% | 14.97% | 34.23% | baseline |
+| TBD | transition | - | - | - | - | |
+| TBD | logit | - | - | - | - | |
 
 ## Diagnostic 기록
 
