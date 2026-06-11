@@ -114,13 +114,12 @@ class TransitionKDModel(EncDecCTCModelBPE):
         if self.kd_mode == "none":
             loss_kd = torch.zeros((), device=log_probs.device, dtype=loss_ctc.dtype)
         elif self.kd_mode == "trans":
-            per_seq = transition_kd_loss_batched(
+            loss_kd = transition_kd_loss_batched(
                 log_probs,
                 batch["ttargets"],
                 input_lengths=enc_len,
                 target_lengths=batch["ttarget_lens"],
-            )
-            loss_kd = (per_seq / enc_len.float().to(log_probs.device)).mean()
+            ).mean()
         elif self.kd_mode == "logit":
             loss_kd = self._frame_logit_kd_loss(
                 log_probs,

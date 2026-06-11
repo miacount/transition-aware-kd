@@ -3,7 +3,7 @@ name: "student-conformer-144x8-1024"
 model:
   sample_rate: 16000
   log_prediction: false
-  ctc_reduction: "mean"
+  ctc_reduction: "mean_batch"
 
   kd_mode: "none"       # none | trans | logit
   kd_weight: 0.0
