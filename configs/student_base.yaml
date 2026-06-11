@@ -7,7 +7,7 @@ model:
 
   kd_mode: "none"       # none | trans | logit
   kd_weight: 0.0
-  logit_kd_temperature: 2.0
+  logit_kd_temperature: 1.0
 
   train_ds:
     manifest_filepath: "data/train_clean_100.json"
