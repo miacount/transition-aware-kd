@@ -4,7 +4,7 @@
 # Usage: bash experiments/run_sub8_sweep.sh
 set -euo pipefail
 
-TRANS_MANIFEST=data/train_clean_100.json
+TRANS_MANIFEST=data/train_clean_100.small_teacher.transition.json
 LOGIT_MANIFEST=data/train_clean_100.small_teacher.frame_top8_t1.json
 
 [[ -f "$TRANS_MANIFEST" ]] || { echo "missing $TRANS_MANIFEST" >&2; exit 1; }
