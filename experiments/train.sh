@@ -11,10 +11,11 @@ options:
   --epochs N           default: 100
   --lr LR              default: config value
   --subsampling N      default: config value
+  --config NAME        config name under configs/ without .yaml, default: student_base
 USAGE
 }
 
-NAME=""; MANIFEST=""; KD_MODE="none"; KD_WEIGHT="0.0"; TEMP="2.0"; EPOCHS="100"; LR=""; SUBSAMPLING=""
+NAME=""; MANIFEST=""; KD_MODE="none"; KD_WEIGHT="0.0"; TEMP="2.0"; EPOCHS="100"; LR=""; SUBSAMPLING=""; CONFIG="student_base"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --name) NAME="$2"; shift 2 ;;
@@ -25,6 +26,7 @@ while [[ $# -gt 0 ]]; do
     --epochs) EPOCHS="$2"; shift 2 ;;
     --lr) LR="$2"; shift 2 ;;
     --subsampling) SUBSAMPLING="$2"; shift 2 ;;
+    --config) CONFIG="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown arg: $1" >&2; usage; exit 1 ;;
   esac
@@ -45,4 +47,4 @@ ARGS=(
 [[ -n "$LR" ]] && ARGS+=("model.optim.lr=$LR")
 [[ -n "$SUBSAMPLING" ]] && ARGS+=("model.encoder.subsampling_factor=$SUBSAMPLING")
 
-python scripts/train.py "${ARGS[@]}"
+python scripts/train.py --config-name "$CONFIG" "${ARGS[@]}"

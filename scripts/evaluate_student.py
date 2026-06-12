@@ -51,7 +51,8 @@ def evaluate_split(model, ds_cfg, device):
     model.wer.reset()
     for batch in dl:
         batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
-        log_probs, enc_len, _ = model.forward(batch["wavs"], batch["wav_lens"])
+        log_probs, enc_len, _ = model.forward(input_signal=batch["wavs"],
+                                                  input_signal_length=batch["wav_lens"])
         loss = model.loss(
             log_probs=log_probs,
             targets=batch["tokens"],
