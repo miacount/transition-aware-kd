@@ -21,23 +21,19 @@ run() {
   bash experiments/train.sh "$@"
 }
 
-# ── trans KD sweep ────────────────────────────────────────────────────────────
-for W in 0.1 0.25 0.5; do
-  run --config student_sub8 \
-      --name "student-sub8-trans-w${W}-clean" \
-      --manifest "$TRANS_MANIFEST" \
-      --kd-mode trans \
-      --kd-weight "$W"
-done
+# ── trans KD (best weight from 4x) ───────────────────────────────────────────
+run --config student_sub8 \
+    --name "student-sub8-trans-w0.25-clean" \
+    --manifest "$TRANS_MANIFEST" \
+    --kd-mode trans \
+    --kd-weight 0.25
 
-# ── logit KD sweep ────────────────────────────────────────────────────────────
-for W in 1.0 5.0 10.0; do
-  run --config student_sub8 \
-      --name "student-sub8-logit-top8-t1-w${W}-clean" \
-      --manifest "$LOGIT_MANIFEST" \
-      --kd-mode logit \
-      --kd-weight "$W"
-done
+# ── logit KD (best weight from 4x) ───────────────────────────────────────────
+run --config student_sub8 \
+    --name "student-sub8-logit-top8-t1-w10.0-clean" \
+    --manifest "$LOGIT_MANIFEST" \
+    --kd-mode logit \
+    --kd-weight 10.0
 
 echo ""
 echo "All sub8 sweep runs complete."
