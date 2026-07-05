@@ -5,8 +5,9 @@ model:
   log_prediction: false
   ctc_reduction: "mean_batch"
 
-  kd_mode: "none"       # none | trans | logit
+  kd_mode: "none"       # none | trans | logit | token_avg | combined
   kd_weight: 0.0
+  token_avg_kd_weight: 0.0
   logit_kd_temperature: 1.0
 
   train_ds:

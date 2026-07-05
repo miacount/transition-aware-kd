@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import hydra
+import torch
 import lightning.pytorch as pl
 from omegaconf import OmegaConf, open_dict
 from nemo.utils import logging
@@ -26,6 +27,19 @@ def main(cfg):
             del model_cfg.test_ds
 
     model = TransitionKDModel(cfg=model_cfg, trainer=trainer)
+
+    # Optional warm initialization from a pre-trained checkpoint (weights only, not optimizer state)
+    init_ckpt = cfg.get("init_from_checkpoint", None)
+    if init_ckpt:
+        logging.info(f"Initializing model weights from: {init_ckpt}")
+        ckpt = torch.load(init_ckpt, map_location="cpu")
+        missing, unexpected = model.load_state_dict(ckpt["state_dict"], strict=False)
+        if missing:
+            logging.warning(f"  Missing keys: {missing}")
+        if unexpected:
+            logging.warning(f"  Unexpected keys: {unexpected}")
+        logging.info("  Weights loaded successfully (optimizer/epoch state discarded)")
+
     trainer.fit(model)
 
     if test_ds is not None:

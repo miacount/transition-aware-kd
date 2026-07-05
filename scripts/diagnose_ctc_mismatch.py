@@ -157,6 +157,8 @@ def main():
     print(f"teacher nonblank->student blank: {safe(totals['t_nb_s_blank'], totals['t_nonblank']) * 100:.2f}%")
     print(f"teacher blank->student nonblank: {safe(totals['t_blank_s_nb'], totals['t_blank']) * 100:.2f}%")
     print(f"both nonblank token diff rate : {safe(totals['both_nb_diff'], totals['both_nonblank']) * 100:.2f}%")
+    nb_token_err = totals['t_nb_s_blank'] + totals['both_nb_diff']
+    print(f"NB spike error rate (given teacher NB): {safe(nb_token_err, totals['t_nonblank']) * 100:.2f}%")
     print(f"transition edit rate          : {safe(totals['trans_edits'], totals['trans_ref']) * 100:.2f}%")
 
     if args.csv_out:

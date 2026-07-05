@@ -9,6 +9,7 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
 import torch
 
 
@@ -38,9 +39,43 @@ def collapse_repeats(ids):
     return out
 
 
+FLOOR = -1e9
+
+
+def viterbi_forced_align(log_probs_np, tokens, blank_id):
+    """CTC forced alignment. tokens: list of int (no blanks). Returns per-frame token id array."""
+    ext = []
+    for t in tokens:
+        ext.append(blank_id)
+        ext.append(t)
+    ext.append(blank_id)
+    S, T = len(ext), log_probs_np.shape[0]
+    alpha = np.full((T, S), FLOOR)
+    bp = np.zeros((T, S), dtype=np.int32)
+    alpha[0, 0] = log_probs_np[0, ext[0]]
+    if S > 1:
+        alpha[0, 1] = log_probs_np[0, ext[1]]
+    for t in range(1, T):
+        for s in range(S):
+            best, src = alpha[t - 1, s], s
+            if s > 0 and alpha[t - 1, s - 1] > best:
+                best, src = alpha[t - 1, s - 1], s - 1
+            if s > 1 and ext[s] != blank_id and ext[s] != ext[s - 2] and alpha[t - 1, s - 2] > best:
+                best, src = alpha[t - 1, s - 2], s - 2
+            alpha[t, s] = best + log_probs_np[t, ext[s]]
+            bp[t, s] = src
+    s = S - 1 if alpha[T - 1, S - 1] > alpha[T - 1, S - 2] else S - 2
+    path = np.zeros(T, dtype=np.int32)
+    path[T - 1] = s
+    for t in range(T - 2, -1, -1):
+        s = bp[t + 1, s]
+        path[t] = s
+    return np.array([ext[s] for s in path], dtype=np.int32)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["transition", "frame_topk"], required=True)
+    ap.add_argument("--mode", choices=["transition", "frame_topk", "token_avg"], required=True)
     ap.add_argument("--manifest_in", required=True)
     ap.add_argument("--manifest_out", required=True)
     ap.add_argument("--teacher", default="stt_en_conformer_ctc_small")
@@ -49,7 +84,11 @@ def main():
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--top_k", type=int, default=8)
     ap.add_argument("--temperature", type=float, default=2.0)
-    ap.add_argument("--out_dir", default="data/frame_kd")
+    ap.add_argument("--out_dir", default="")
+    ap.add_argument("--confidence_threshold", type=float, default=0.0,
+                    help="token_avg: skip segment if avg_p[token] < threshold (0=disabled)")
+    ap.add_argument("--min_seg_len", type=int, default=1,
+                    help="token_avg: skip segment if non-blank frame count < min_seg_len")
     args = ap.parse_args()
 
     import soundfile as sf
@@ -58,18 +97,25 @@ def main():
 
     teacher_name = "stt_en_conformer_ctc_small" if args.teacher == "stt_en_conformer_small" else args.teacher
     print(f"[load] {teacher_name}")
-    teacher = nemo_asr.models.EncDecCTCModelBPE.from_pretrained(teacher_name)
+    if teacher_name.endswith(".nemo"):
+        teacher = nemo_asr.models.EncDecCTCModelBPE.restore_from(teacher_name)
+    else:
+        teacher = nemo_asr.models.EncDecCTCModelBPE.from_pretrained(teacher_name)
     teacher = teacher.to(args.device).eval()
     teacher.freeze()
     sample_rate = teacher.cfg.preprocessor.sample_rate
+    blank_id = int(teacher.decoder.num_classes_with_blank - 1)
+    print(f"[blank_id] {blank_id}")
 
     rows = read_manifest(args.manifest_in)
     if args.limit:
         rows = rows[: args.limit]
 
-    out_dir = Path(args.out_dir)
+    out_dir = Path(args.out_dir) if args.out_dir else Path(
+        "data/frame_kd" if args.mode == "frame_topk" else "data/token_avg_kd"
+    )
     manifest_dir = Path(args.manifest_out).parent
-    if args.mode == "frame_topk":
+    if args.mode in ("frame_topk", "token_avg"):
         (manifest_dir / out_dir.name).mkdir(parents=True, exist_ok=True)
 
     def load_audio(path):
@@ -85,6 +131,9 @@ def main():
     t_lengths = []
     target_lengths = []
     topk_masses = []
+    n_segs_total = 0
+    n_filtered_len = 0
+    n_filtered_conf = 0
 
     with torch.no_grad():
         for start in range(0, len(rows), args.batch_size):
@@ -105,7 +154,7 @@ def main():
                     target = collapse_repeats(greedy[i, :frames].tolist())
                     row["teacher_target"] = target
                     target_lengths.append(len(target))
-                else:
+                elif args.mode == "frame_topk":
                     lp = log_probs[i, :frames].float()
                     if args.temperature != 1.0:
                         lp = torch.log_softmax(lp / args.temperature, dim=-1)
@@ -125,6 +174,107 @@ def main():
                         manifest_dir / rel,
                     )
                     row["teacher_frame_kd_path"] = str(rel)
+                else:  # token_avg
+                    lp = log_probs[i, :frames].float()
+                    prob = lp.exp().cpu().numpy()  # (T, K)
+                    lp_np = lp.cpu().numpy()
+
+                    # GT transcript → token sequence (GT-Viterbi alignment)
+                    # Using GT anchors teacher posteriors to correct token positions,
+                    # avoiding pseudo-labeling teacher errors.
+                    tokens = teacher.tokenizer.text_to_ids(row["text"])
+                    tokens = [t for t in tokens if t != blank_id]
+
+                    if not tokens:
+                        # silent/empty utterance — skip KD target
+                        continue
+
+                    frame_tokens = viterbi_forced_align(lp_np, tokens, blank_id)
+
+                    # collect non-blank segments
+                    seg_starts, seg_ends, avg_ids_list, avg_probs_list = [], [], [], []
+                    trans_left_ids_list, trans_left_probs_list, trans_left_valid_list = [], [], []
+                    trans_right_ids_list, trans_right_probs_list, trans_right_valid_list = [], [], []
+                    j = 0
+                    while j < len(frame_tokens):
+                        tok = int(frame_tokens[j])
+                        k = j
+                        while k < len(frame_tokens) and int(frame_tokens[k]) == tok:
+                            k += 1
+                        if tok != blank_id:
+                            n_segs_total += 1
+                            seg_len = k - j
+                            if seg_len < args.min_seg_len:
+                                n_filtered_len += 1
+                                j = k
+                                continue
+                            seg_prob = prob[j:k]          # (seg_len, K)
+                            avg_p = seg_prob.mean(axis=0)  # (K,)
+                            if args.confidence_threshold > 0.0 and avg_p[tok] < args.confidence_threshold:
+                                n_filtered_conf += 1
+                                j = k
+                                continue
+                            top_k = min(args.top_k, len(avg_p))
+                            top_idx = np.argpartition(avg_p, -top_k)[-top_k:]
+                            top_idx = top_idx[np.argsort(avg_p[top_idx])[::-1]]
+                            top_probs = avg_p[top_idx]
+                            top_probs = top_probs / top_probs.sum()
+                            seg_starts.append(j)
+                            seg_ends.append(k)
+                            avg_ids_list.append(top_idx.astype(np.int32))
+                            avg_probs_list.append(top_probs.astype(np.float32))
+
+                            # left transition: frame j-1 (blank frame before segment)
+                            if j > 0 and int(frame_tokens[j - 1]) == blank_id:
+                                lp = prob[j - 1]
+                                li = np.argpartition(lp, -top_k)[-top_k:]
+                                li = li[np.argsort(lp[li])[::-1]]
+                                lv = lp[li]; lv = lv / lv.sum()
+                                trans_left_ids_list.append(li.astype(np.int32))
+                                trans_left_probs_list.append(lv.astype(np.float32))
+                                trans_left_valid_list.append(True)
+                            else:
+                                trans_left_ids_list.append(np.zeros(top_k, dtype=np.int32))
+                                trans_left_probs_list.append(np.zeros(top_k, dtype=np.float32))
+                                trans_left_valid_list.append(False)
+
+                            # right transition: frame k (blank frame after segment)
+                            if k < frames and int(frame_tokens[k]) == blank_id:
+                                rp = prob[k]
+                                ri = np.argpartition(rp, -top_k)[-top_k:]
+                                ri = ri[np.argsort(rp[ri])[::-1]]
+                                rv = rp[ri]; rv = rv / rv.sum()
+                                trans_right_ids_list.append(ri.astype(np.int32))
+                                trans_right_probs_list.append(rv.astype(np.float32))
+                                trans_right_valid_list.append(True)
+                            else:
+                                trans_right_ids_list.append(np.zeros(top_k, dtype=np.int32))
+                                trans_right_probs_list.append(np.zeros(top_k, dtype=np.float32))
+                                trans_right_valid_list.append(False)
+                        j = k
+
+                    if not seg_starts:
+                        # all segments filtered — skip KD target for this utterance
+                        continue
+                    rel = Path(out_dir.name) / f"{global_idx:06d}.pt"
+                    torch.save(
+                        {
+                            "seg_starts": torch.tensor(seg_starts, dtype=torch.int32),
+                            "seg_ends":   torch.tensor(seg_ends,   dtype=torch.int32),
+                            "avg_ids":    torch.tensor(np.stack(avg_ids_list),   dtype=torch.int32),
+                            "avg_probs":  torch.tensor(np.stack(avg_probs_list), dtype=torch.float16),
+                            "trans_left_ids":   torch.tensor(np.stack(trans_left_ids_list),   dtype=torch.int32),
+                            "trans_left_probs": torch.tensor(np.stack(trans_left_probs_list), dtype=torch.float16),
+                            "trans_left_valid": torch.tensor(trans_left_valid_list,            dtype=torch.bool),
+                            "trans_right_ids":   torch.tensor(np.stack(trans_right_ids_list),   dtype=torch.int32),
+                            "trans_right_probs": torch.tensor(np.stack(trans_right_probs_list), dtype=torch.float16),
+                            "trans_right_valid": torch.tensor(trans_right_valid_list,            dtype=torch.bool),
+                            "teacher_frames": frames,
+                        },
+                        manifest_dir / rel,
+                    )
+                    row["teacher_token_avg_path"] = str(rel)
+                    target_lengths.append(len(seg_starts))
 
             print(f"[prog] {min(start + args.batch_size, len(rows))}/{len(rows)}")
 
@@ -138,6 +288,14 @@ def main():
     if topk_masses:
         print(f"top-k/temp       : {args.top_k}/{args.temperature}")
         print(f"top-k mass mean  : {sum(topk_masses) / len(topk_masses):.4f}")
+    if args.mode == "token_avg" and n_segs_total > 0:
+        n_kept = n_segs_total - n_filtered_len - n_filtered_conf
+        print(f"segments total   : {n_segs_total}")
+        print(f"filtered min_len : {n_filtered_len} ({100*n_filtered_len/n_segs_total:.1f}%)")
+        print(f"filtered conf    : {n_filtered_conf} ({100*n_filtered_conf/n_segs_total:.1f}%)")
+        print(f"segments kept    : {n_kept} ({100*n_kept/n_segs_total:.1f}%)")
+        print(f"conf_threshold   : {args.confidence_threshold}")
+        print(f"min_seg_len      : {args.min_seg_len}")
     print(f"written          : {args.manifest_out}")
 
 

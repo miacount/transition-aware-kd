@@ -5,9 +5,27 @@ model:
   log_prediction: false
   ctc_reduction: "mean_batch"
 
-  kd_mode: "none"       # none | trans | logit
+  kd_mode: "none"       # none | trans | logit | token_avg | combined | guided | delayed_logit | self_kd | aligned_token | span_kd
   kd_weight: 0.0
+  token_avg_kd_weight: 0.0
+  transition_kd_weight: 0.0
+  kd_lambda: null       # paper formula: L=(1-λ)*L_CTC + λ*L_KD; null→legacy L_CTC+kd_weight*L_KD
   logit_kd_temperature: 2.0
+  logit_kd_blank_mode: "none"   # none | elimination | symmetric | trim | threshold | random
+  logit_kd_blank_n: 1           # symmetric: extend n frames each side of non-blank
+  logit_kd_blank_threshold: 0.9 # threshold: select frame if p(blank) < threshold
+  logit_kd_blank_beta: 0.5      # random: fraction of blank frames to include
+  logit_kd_occ_weight: 0.0     # KL decomp: λ_occ for binary blank/non-blank KL at d=1 blank frames
+  logit_kd_res_weight: 0.0     # KL decomp: λ_res for blank-normalised conditional KL at d=1 blank frames
+  logit_kd_tab_size: 2          # delayed_logit: TAB window [s_t, s_t+tab_size]
+  span_kd_gate_threshold: 0.3   # span_kd: skip token occurrences below this support/teacher overlap gate
+  kd_start_step: 0              # CTC-only warm-up: KD disabled until this global_step
+  skd_split_layer: 4            # self_kd: encoder layer to attach intermediate CTC head
+  skd_alpha: 0.5                # self_kd: (1-α)*CTC_full + α*(CTC_inter + SKD)
+  sr_ctc_weight: 0.0            # SR-CTC smooth regularization weight beta (Yao 2025 A.1); 0=off
+  cr_ctc_weight: 0.2            # cr_ctc: consistency loss weight alpha (Yao et al. 2025)
+  cr_ctc_time_mask_factor: 2.5  # cr_ctc: time-masking regions/width multiplier vs. base SpecAugment
+  cr_ctc_warm_step: 2000        # cr_ctc: steps to linearly ramp cr loss weight 0 -> cr_ctc_weight
 
   train_ds:
     manifest_filepath: "data/train_clean_100.json"
