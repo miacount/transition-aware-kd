@@ -16,6 +16,10 @@
 | 평가 | dev/test-clean, dev/test-other, corpus-level WER |
 | 학습 | 100 epoch (별도 표기 시 예외) |
 
+**Teacher WER (KD 상한, greedy)**: test-clean **3.70** / test-other **8.14** (dev-clean 3.67 / dev-other 8.11).
+Teacher(13M·960h+ 학습)와 student(4.8M·100h)의 용량·데이터 격차가 크므로, KD의 목표는 이 상한에 근접하는 것이 아니라
+**동일 student·데이터에서 no-KD(15.12/33.94) 대비 얼마나 teacher 쪽으로 끌어오는가**이다.
+
 > **주의**: 소규모(4.8M student, 100h) 셋업이다. CR-CTC 원논문(Zipformer, 960h+)과 절대 WER은 비교 불가하며, 본 보고의 모든 비교는 **동일 셋업 내 상대 비교**다.
 
 ---
@@ -99,6 +103,7 @@ L = L_CTC  +  w · Σ_u CE( s_u , q_u )   +  (α) · L_SR
 
 | 방법 | 계열 | test-clean | test-other |
 |---|---|---:|---:|
+| *Teacher (상한, 참고)* | — | *3.70* | *8.14* |
 | no-KD | baseline | 15.12 | 33.94 |
 | Vanilla logit KD (Hilmes) | frame | 14.29 | 33.03 |
 | KD-BE (Hilmes) | frame | 14.00 | 32.86 |
