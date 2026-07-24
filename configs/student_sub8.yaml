@@ -1,3 +1,6 @@
+# 8x subsampling student. Regenerated 2026-07-13 from student_base.yaml —
+# ONLY diffs: run name and subsampling_factor. Keep key-parity with base
+# (train.sh passes fixed model.* overrides; missing keys break hydra).
 name: "student-conformer-144x8-sub8-1024"
 
 model:
@@ -5,10 +8,38 @@ model:
   log_prediction: false
   ctc_reduction: "mean_batch"
 
-  kd_mode: "none"       # none | trans | logit | token_avg | combined
+  kd_mode: "none"       # none | trans | logit | token_avg | combined | guided | delayed_logit | self_kd | aligned_token | span_kd
   kd_weight: 0.0
   token_avg_kd_weight: 0.0
-  logit_kd_temperature: 1.0
+  transition_kd_weight: 0.0
+  kd_lambda: null       # paper formula: L=(1-λ)*L_CTC + λ*L_KD; null→legacy L_CTC+kd_weight*L_KD
+  logit_kd_temperature: 2.0
+  logit_kd_blank_mode: "none"   # none | elimination | symmetric | trim | threshold | random
+  logit_kd_blank_n: 1           # symmetric: extend n frames each side of non-blank
+  logit_kd_blank_threshold: 0.9 # threshold: select frame if p(blank) < threshold
+  logit_kd_blank_beta: 0.5      # random: fraction of blank frames to include
+  logit_kd_occ_weight: 0.0     # KL decomp: λ_occ for binary blank/non-blank KL at d=1 blank frames
+  logit_kd_res_weight: 0.0     # KL decomp: λ_res for blank-normalised conditional KL at d=1 blank frames
+  logit_kd_tab_size: 2          # delayed_logit: TAB window [s_t, s_t+tab_size]
+  logit_kd_cross_pool: false    # logit KD, cross frame-rate: average BOTH teacher frames per student frame (spike-preserving)
+  span_kd_gate_threshold: 0.3   # span_kd: skip token occurrences below this support/teacher overlap gate
+  span_kd_dual: false           # span_kd: pool student with its OWN de-peaked FB gamma (on-the-fly, detached)
+  span_kd_student_delta: 6.0    # span_kd_dual: blank penalty (nats) for the student-side gamma
+  span_kd_support_mode: gamma  # span_kd: time-axis shape ablation | gamma (teacher occupancy) | uniform (flat over support) | rect (flat n_eff-wide window at peak)
+  span_kd_support_width: 0      # span_kd_support_mode=rect: window width in frames; 0 = use per-token n_eff
+  span_kd_support_eps: 0.01     # span_kd_support_mode=uniform: support = frames above this fraction of the per-token peak
+  boundary_kd_cell: 2          # boundary_kd: 1 soft | 2 hard{blank,y_u} m_delta (proposal) | 3 hard m_zero | 4 hard within-token uniform dist=1
+  boundary_kd_weight_source: residual  # boundary_kd: residual ([g^d-g^0]_+, shoulders) | gamma_delta (full occupancy: core+shoulders; needs merged manifest)
+  boundary_kd_train_min: 0.0    # boundary_kd: runtime residual mask (raise above build store_min 0.001 without rebuild)
+  kd_start_step: 0              # CTC-only warm-up: KD disabled until this global_step
+  skd_split_layer: 4            # self_kd: encoder layer to attach intermediate CTC head
+  skd_alpha: 0.5                # self_kd: (1-α)*CTC_full + α*(CTC_inter + SKD)
+  sr_ctc_weight: 0.0            # SR-CTC smooth regularization weight beta (Yao 2025 A.1); 0=off
+  label_prior_ctc_alpha: 0.0    # label-prior CTC regularization strength (Huang 2024); 0=off
+  label_prior_momentum: 0.99    # EMA momentum for the running label prior estimate
+  cr_ctc_weight: 0.2            # cr_ctc: consistency loss weight alpha (Yao et al. 2025)
+  cr_ctc_time_mask_factor: 2.5  # cr_ctc: time-masking regions/width multiplier vs. base SpecAugment
+  cr_ctc_warm_step: 2000        # cr_ctc: steps to linearly ramp cr loss weight 0 -> cr_ctc_weight
 
   train_ds:
     manifest_filepath: "data/train_clean_100.json"
@@ -129,7 +160,7 @@ exp_manager:
   name: "student-conformer-144x8-sub8-1024"
   create_wandb_logger: true
   wandb_logger_kwargs:
-    project: "transition-aware-kd"
+    project: "transition-aware-kd-sub8"
     name: "student-conformer-144x8-sub8-1024"
   create_checkpoint_callback: true
   checkpoint_callback_params:

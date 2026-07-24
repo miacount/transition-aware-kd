@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="440" fill="#FFFFFF"/>
+
+  <!-- speech icon -->
+  <g stroke="#475569" stroke-width="3" stroke-linecap="round">
+    <line x1="46"  y1="143" x2="46"  y2="153"/>
+    <line x1="54"  y1="137" x2="54"  y2="159"/>
+    <line x1="62"  y1="131" x2="62"  y2="165"/>
+    <line x1="70"  y1="139" x2="70"  y2="157"/>
+    <line x1="78"  y1="133" x2="78"  y2="163"/>
+    <line x1="86"  y1="141" x2="86"  y2="155"/>
+    <line x1="94"  y1="135" x2="94"  y2="161"/>
+    <line x1="102" y1="143" x2="102" y2="153"/>
+  </g>
+  <text x="74" y="182" font-size="10" text-anchor="middle" fill="#475569">speech</text>
+  <text x="44" y="206" font-size="11" fill="#64748B">GT:&#160;
+    <tspan fill="#2563EB" font-weight="bold">C</tspan>
+    <tspan fill="#D97706" font-weight="bold"> A</tspan>
+    <tspan fill="#059669" font-weight="bold"> T</tspan>
+  </text>
+  <text x="44" y="220" font-size="8" fill="#94A3B8">(constrains step &#9314;)</text>
+
+  <!-- arrow speech -> HM1 -->
+  <line x1="114" y1="148" x2="180" y2="148" stroke="#334155" stroke-width="1.4" marker-end="url(#arr)"/>
+  <text x="148" y="136" font-size="10" text-anchor="middle" fill="#334155">Teacher</text>
+  <text x="148" y="163" font-size="8.5" text-anchor="middle" fill="#64748B">(frozen)</text>
+
+  <!-- ===== HM1: original teacher posterior ===== -->
+  <text x="210" y="80" font-size="11.5" font-weight="bold" fill="#1E293B">&#9312; teacher posterior P&#7488; (peaky)</text>
+
+  <!-- cells -->
+  <rect x="236" y="100" width="26" height="24" fill="#2563EB" fill-opacity="0.90"/>
+  <rect x="262" y="100" width="26" height="24" fill="#2563EB" fill-opacity="0.08"/>
+  <rect x="288" y="124" width="26" height="24" fill="#D97706" fill-opacity="0.90"/>
+  <rect x="314" y="124" width="26" height="24" fill="#D97706" fill-opacity="0.09"/>
+  <rect x="340" y="148" width="26" height="24" fill="#059669" fill-opacity="0.90"/>
+  <rect x="366" y="148" width="26" height="24" fill="#059669" fill-opacity="0.08"/>
+  <rect x="210" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.99"/>
+  <rect x="236" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.12"/>
+  <rect x="262" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.94"/>
+  <rect x="288" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.12"/>
+  <rect x="314" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.93"/>
+  <rect x="340" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.12"/>
+  <rect x="366" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.94"/>
+
+  <!-- cell values -->
+  <text x="249" y="116" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.90</text>
+  <text x="275" y="116" font-size="8.5" text-anchor="middle" fill="#334155">.05</text>
+  <text x="301" y="140" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.90</text>
+  <text x="327" y="140" font-size="8.5" text-anchor="middle" fill="#334155">.06</text>
+  <text x="353" y="164" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.90</text>
+  <text x="379" y="164" font-size="8.5" text-anchor="middle" fill="#334155">.05</text>
+  <text x="223" y="188" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.99</text>
+  <text x="249" y="188" font-size="8.5" text-anchor="middle" fill="#334155">.09</text>
+  <text x="275" y="188" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.94</text>
+  <text x="301" y="188" font-size="8.5" text-anchor="middle" fill="#334155">.09</text>
+  <text x="327" y="188" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.93</text>
+  <text x="353" y="188" font-size="8.5" text-anchor="middle" fill="#334155">.09</text>
+  <text x="379" y="188" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.94</text>
+
+  <!-- grid -->
+  <rect x="210" y="100" width="182" height="96" fill="none" stroke="#CBD5E1"/>
+  <line x1="210" y1="124" x2="392" y2="124" stroke="#CBD5E1"/>
+  <line x1="210" y1="148" x2="392" y2="148" stroke="#CBD5E1"/>
+  <line x1="210" y1="172" x2="392" y2="172" stroke="#CBD5E1"/>
+  <line x1="236" y1="100" x2="236" y2="196" stroke="#E2E8F0"/>
+  <line x1="262" y1="100" x2="262" y2="196" stroke="#E2E8F0"/>
+  <line x1="288" y1="100" x2="288" y2="196" stroke="#E2E8F0"/>
+  <line x1="314" y1="100" x2="314" y2="196" stroke="#E2E8F0"/>
+  <line x1="340" y1="100" x2="340" y2="196" stroke="#E2E8F0"/>
+  <line x1="366" y1="100" x2="366" y2="196" stroke="#E2E8F0"/>
+
+  <!-- row / frame labels -->
+  <text x="204" y="116" font-size="10" text-anchor="end" fill="#2563EB" font-weight="bold">C</text>
+  <text x="204" y="140" font-size="10" text-anchor="end" fill="#D97706" font-weight="bold">A</text>
+  <text x="204" y="164" font-size="10" text-anchor="end" fill="#059669" font-weight="bold">T</text>
+  <text x="204" y="188" font-size="10" text-anchor="end" fill="#64748B" font-weight="bold">&#8709;</text>
+  <text x="223" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">1</text>
+  <text x="249" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">2</text>
+  <text x="275" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">3</text>
+  <text x="301" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">4</text>
+  <text x="327" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">5</text>
+  <text x="353" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">6</text>
+  <text x="379" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">7</text>
+  <text x="396" y="210" font-size="8" fill="#94A3B8">frames &#8594;</text>
+
+  <!-- column highlights (f1, f3) -->
+  <rect x="210" y="98" width="26" height="100" fill="none" stroke="#475569" stroke-dasharray="3 2"/>
+  <rect x="262" y="98" width="26" height="100" fill="none" stroke="#475569" stroke-dasharray="3 2"/>
+
+  <!-- ===== de-peak arrow ===== -->
+  <line x1="400" y1="148" x2="482" y2="148" stroke="#334155" stroke-width="1.6" marker-end="url(#arr)"/>
+  <text x="441" y="122" font-size="10" text-anchor="middle" fill="#334155" font-weight="bold">de-peak (blank only)</text>
+  <text x="441" y="136" font-size="9.5" text-anchor="middle" fill="#334155">log P(&#8709;) &#8722; &#948;,&#160; &#948;=6</text>
+  <text x="441" y="164" font-size="9.5" text-anchor="middle" fill="#64748B">renormalize</text>
+
+  <!-- ===== HM2: de-peaked ===== -->
+  <text x="490" y="80" font-size="11.5" font-weight="bold" fill="#1E293B">&#9313; de-peaked P&#771;&#7488; (shoulders revived)</text>
+
+  <!-- span brackets -->
+  <g stroke-width="1.5" fill="none">
+    <path d="M517,94 v-4 h49 v4"  stroke="#2563EB"/>
+    <path d="M570,94 v-4 h48 v4"  stroke="#D97706"/>
+    <path d="M622,94 v-4 h48 v4"  stroke="#059669"/>
+  </g>
+
+  <!-- cells -->
+  <rect x="490" y="100" width="26" height="24" fill="#2563EB" fill-opacity="0.07"/>
+  <rect x="516" y="100" width="26" height="24" fill="#2563EB" fill-opacity="0.99"/>
+  <rect x="542" y="100" width="26" height="24" fill="#2563EB" fill-opacity="0.95"/>
+  <rect x="568" y="124" width="26" height="24" fill="#D97706" fill-opacity="0.99"/>
+  <rect x="594" y="124" width="26" height="24" fill="#D97706" fill-opacity="0.96"/>
+  <rect x="620" y="148" width="26" height="24" fill="#059669" fill-opacity="0.99"/>
+  <rect x="646" y="148" width="26" height="24" fill="#059669" fill-opacity="0.95"/>
+  <rect x="490" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.93"/>
+  <rect x="542" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.08"/>
+  <rect x="594" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.07"/>
+  <rect x="646" y="172" width="26" height="24" fill="#94A3B8" fill-opacity="0.08"/>
+
+  <!-- cell values -->
+  <text x="503" y="116" font-size="8.5" text-anchor="middle" fill="#334155">.07</text>
+  <text x="529" y="116" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.99</text>
+  <text x="555" y="116" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.95</text>
+  <text x="581" y="140" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.99</text>
+  <text x="607" y="140" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.96</text>
+  <text x="633" y="164" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.99</text>
+  <text x="659" y="164" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.95</text>
+  <text x="503" y="188" font-size="8.5" text-anchor="middle" fill="#FFFFFF" font-weight="bold">.93</text>
+  <text x="555" y="188" font-size="8.5" text-anchor="middle" fill="#334155">.05</text>
+  <text x="607" y="188" font-size="8.5" text-anchor="middle" fill="#334155">.04</text>
+  <text x="659" y="188" font-size="8.5" text-anchor="middle" fill="#334155">.05</text>
+
+  <!-- grid -->
+  <rect x="490" y="100" width="182" height="96" fill="none" stroke="#CBD5E1"/>
+  <line x1="490" y1="124" x2="672" y2="124" stroke="#CBD5E1"/>
+  <line x1="490" y1="148" x2="672" y2="148" stroke="#CBD5E1"/>
+  <line x1="490" y1="172" x2="672" y2="172" stroke="#CBD5E1"/>
+  <line x1="516" y1="100" x2="516" y2="196" stroke="#E2E8F0"/>
+  <line x1="542" y1="100" x2="542" y2="196" stroke="#E2E8F0"/>
+  <line x1="568" y1="100" x2="568" y2="196" stroke="#E2E8F0"/>
+  <line x1="594" y1="100" x2="594" y2="196" stroke="#E2E8F0"/>
+  <line x1="620" y1="100" x2="620" y2="196" stroke="#E2E8F0"/>
+  <line x1="646" y1="100" x2="646" y2="196" stroke="#E2E8F0"/>
+
+  <!-- row / frame labels -->
+  <text x="484" y="116" font-size="10" text-anchor="end" fill="#2563EB" font-weight="bold">C</text>
+  <text x="484" y="140" font-size="10" text-anchor="end" fill="#D97706" font-weight="bold">A</text>
+  <text x="484" y="164" font-size="10" text-anchor="end" fill="#059669" font-weight="bold">T</text>
+  <text x="484" y="188" font-size="10" text-anchor="end" fill="#64748B" font-weight="bold">&#8709;</text>
+  <text x="503" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">1</text>
+  <text x="529" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">2</text>
+  <text x="555" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">3</text>
+  <text x="581" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">4</text>
+  <text x="607" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">5</text>
+  <text x="633" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">6</text>
+  <text x="659" y="210" font-size="8" text-anchor="middle" fill="#94A3B8">7</text>
+
+  <!-- column highlights (f1, f3) -->
+  <rect x="490" y="98" width="26" height="100" fill="none" stroke="#475569" stroke-dasharray="3 2"/>
+  <rect x="542" y="98" width="26" height="100" fill="none" stroke="#475569" stroke-dasharray="3 2"/>
+
+  <!-- next-step stub -->
+  <line x1="680" y1="148" x2="736" y2="148" stroke="#94A3B8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arrg)"/>
+  <text x="742" y="140" font-size="9" fill="#94A3B8">&#9314; GT-constrained</text>
+  <text x="742" y="152" font-size="9" fill="#94A3B8">forward&#8211;backward</text>
+  <text x="742" y="164" font-size="9" fill="#94A3B8">(next figure)</text>
+
+  <!-- ===== callout boxes ===== -->
+  <rect x="150" y="248" width="382" height="102" rx="6" fill="#F8FAFC" stroke="#CBD5E1"/>
+  <text x="166" y="270" font-size="11" font-weight="bold" fill="#1E293B">frame 3 &#8212; shoulder of <tspan fill="#2563EB">C</tspan> : revived</text>
+  <text x="166" y="290" font-size="10" fill="#334155">before:&#160; P(&#8709;) = .94&#160; vs&#160; P(C) = .05&#160;&#160;&#8594;&#160; odds 19 : 1</text>
+  <text x="166" y="308" font-size="10" fill="#334155">apply &#8722;&#948;:&#160; odds &#247; e&#8310; &#8776; 403&#160;&#160;&#8594;&#160; 0.05 : 1</text>
+  <text x="166" y="326" font-size="10" fill="#334155">after:&#160; P&#771;(C) = <tspan font-weight="bold" fill="#2563EB">.95</tspan>,&#160; P&#771;(&#8709;) = .05&#160;&#160;&#8594;&#160; C wins the frame</text>
+
+  <rect x="556" y="248" width="368" height="102" rx="6" fill="#F8FAFC" stroke="#CBD5E1"/>
+  <text x="572" y="270" font-size="11" font-weight="bold" fill="#1E293B">frame 1 &#8212; true silence : unchanged</text>
+  <text x="572" y="290" font-size="10" fill="#334155">before:&#160; P(&#8709;) = .995&#160; vs&#160; P(C) = .0002&#160;&#8594;&#160; odds &#8776; 5000 : 1</text>
+  <text x="572" y="308" font-size="10" fill="#334155">apply &#8722;&#948;:&#160; &#247; 403&#160;&#160;&#8594;&#160; still 12 : 1</text>
+  <text x="572" y="326" font-size="10" fill="#334155">after:&#160; P&#771;(&#8709;) = <tspan font-weight="bold">.93</tspan>&#160;&#160;&#8594;&#160; stays blank</text>
+
+  <!-- caption -->
+  <text x="40" y="382" font-size="10" fill="#475569" font-style="italic">Fig. 1 (steps &#9312;&#8211;&#9313;). Blank-only de-peaking: subtract &#948; = 6 nats from the blank log-probability at every frame, then renormalize per frame.</text>
+  <text x="40" y="398" font-size="10" fill="#475569" font-style="italic">Only shoulder frames flip (f3: 19:1 &#8594; 0.05:1), widening each token&#8217;s support to &#8776; 2 frames; true silence keeps blank (f1). Non-blank ratios are untouched.</text>
+  <text x="40" y="414" font-size="10" fill="#475569" font-style="italic">P&#771;&#7488; is used only to extract the alignment (step &#9314;); distillation content later comes from the original P&#7488;.</text>
+</svg>

@@ -1,4 +1,6 @@
-name: "student-conformer-144x8-1024"
+# TED-LIUM 100h variant of student_base. ONLY diffs vs base: val/test manifests
+# (tedlium_dev/test) and run/project names. train_ds is overridden by train.sh --manifest.
+name: "student-conformer-144x8-1024-ted"
 
 model:
   sample_rate: 16000
@@ -25,17 +27,6 @@ model:
   span_kd_student_delta: 6.0    # span_kd_dual: blank penalty (nats) for the student-side gamma
   span_kd_emit_beta: 1.0        # span_kd: weight on emission term -log m_u; beta=1 == current loss, beta=0 = content-only
   span_kd_uniform_target: false # span_kd: flatten teacher top-k to uniform (isolate relative-weight dark knowledge)
-  span_kd_cnw: false            # span_kd: confidence-need weighting (teacher-decisive & student-weak spans get more KD)
-  span_kd_cnw_alpha: 1.0        # span_kd_cnw: teacher-decisiveness (top1-top2) exponent
-  span_kd_cnw_gamma: 1.0        # span_kd_cnw: student-need (1 - s_top1) exponent
-  span_kd_cnw_wmin: 0.2         # span_kd_cnw: min per-span weight (before mean-1 normalization)
-  span_kd_cnw_wmax: 5.0         # span_kd_cnw: max per-span weight (before mean-1 normalization)
-  span_kd_support_mode: gamma  # span_kd: time-axis shape ablation | gamma (teacher occupancy) | uniform (flat over support) | rect (flat n_eff-wide window at peak)
-  span_kd_support_width: 0      # span_kd_support_mode=rect: window width in frames; 0 = use per-token n_eff
-  span_kd_support_eps: 0.01     # span_kd_support_mode=uniform: support = frames above this fraction of the per-token peak
-  boundary_kd_cell: 2          # boundary_kd: 1 soft | 2 hard{blank,y_u} m_delta (proposal) | 3 hard m_zero | 4 hard within-token uniform dist=1
-  boundary_kd_weight_source: residual  # boundary_kd: residual ([g^d-g^0]_+, shoulders) | gamma_delta (full occupancy: core+shoulders; needs merged manifest)
-  boundary_kd_train_min: 0.0    # boundary_kd: runtime residual mask (raise above build store_min 0.001 without rebuild)
   kd_start_step: 0              # CTC-only warm-up: KD disabled until this global_step
   skd_split_layer: 4            # self_kd: encoder layer to attach intermediate CTC head
   skd_alpha: 0.5                # self_kd: (1-α)*CTC_full + α*(CTC_inter + SKD)
@@ -55,7 +46,7 @@ model:
     pin_memory: true
 
   validation_ds:
-    manifest_filepath: "data/dev_clean.json"
+    manifest_filepath: "data/tedlium_dev.json"
     sample_rate: 16000
     batch_size: 32
     shuffle: false
@@ -63,29 +54,15 @@ model:
     pin_memory: true
 
   test_ds:
-    - name: "dev_clean"
-      manifest_filepath: "data/dev_clean.json"
+    - name: "ted_dev"
+      manifest_filepath: "data/tedlium_dev.json"
       sample_rate: 16000
       batch_size: 32
       shuffle: false
       num_workers: 8
       pin_memory: true
-    - name: "dev_other"
-      manifest_filepath: "data/dev_other.json"
-      sample_rate: 16000
-      batch_size: 32
-      shuffle: false
-      num_workers: 8
-      pin_memory: true
-    - name: "test_clean"
-      manifest_filepath: "data/test_clean.json"
-      sample_rate: 16000
-      batch_size: 32
-      shuffle: false
-      num_workers: 8
-      pin_memory: true
-    - name: "test_other"
-      manifest_filepath: "data/test_other.json"
+    - name: "ted_test"
+      manifest_filepath: "data/tedlium_test.json"
       sample_rate: 16000
       batch_size: 32
       shuffle: false
@@ -144,9 +121,13 @@ model:
     sched:
       name: NoamAnnealing
       d_model: 144
-      # warmup_steps scaled for effective batch 64 (batch_size 32 × accumulate 2):
-      # original 10000 steps @ batch 16  →  2500 steps @ batch 64  (same samples seen)
-      warmup_steps: 2500
+      # warmup_steps counts optimizer steps, which depend on #utterances/epoch.
+      # LS train-clean-100 = 28.5k utts → 2500 steps ≈ 5.6 warmup epochs. TED 100h
+      # has ~69k (shorter) utts → 2.4x more steps/epoch, so 2500 steps is only ~2.3
+      # epochs and the from-scratch CTC collapses to all-blank before LR ramps.
+      # Rescaled to match LS's ~5.6 warmup epochs on TED's utterance count (verified:
+      # escapes the blank basin at epoch ~4, val_wer 0.99→0.41 by epoch 19).
+      warmup_steps: 6000
       min_lr: 1e-5
 
 trainer:
@@ -165,7 +146,7 @@ exp_manager:
   name: "student-conformer-144x8-1024"
   create_wandb_logger: true
   wandb_logger_kwargs:
-    project: "transition-aware-kd"
+    project: "transition-aware-kd-ted"
     name: "student-conformer-144x8-1024"
   create_checkpoint_callback: true
   checkpoint_callback_params:

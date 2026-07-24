@@ -26,7 +26,9 @@ class ASRKDDataset(Dataset):
         require_frame_kd=False,
         require_token_avg_kd=False,
         require_span_kd=False,
+        require_sctc=False,
         require_combined_kd=False,
+        require_boundary_kd=False,
     ):
         self.manifest_path = Path(manifest_path)
         self.rows = read_manifest(manifest_path)
@@ -36,6 +38,8 @@ class ASRKDDataset(Dataset):
         self.require_frame_kd = require_frame_kd or require_combined_kd
         self.require_token_avg_kd = require_token_avg_kd or require_combined_kd
         self.require_span_kd = require_span_kd
+        self.require_sctc = require_sctc
+        self.require_boundary_kd = require_boundary_kd
         if require_transition:
             self.rows = [r for r in self.rows if r.get("teacher_target")]
         if self.require_frame_kd:
@@ -44,6 +48,10 @@ class ASRKDDataset(Dataset):
             self.rows = [r for r in self.rows if r.get("teacher_token_avg_path")]
         if self.require_span_kd:
             self.rows = [r for r in self.rows if r.get("teacher_span_kd_path")]
+        if self.require_sctc:
+            self.rows = [r for r in self.rows if r.get("teacher_sctc_path")]
+        if self.require_boundary_kd:
+            self.rows = [r for r in self.rows if r.get("boundary_kd_path")]
         if not self.rows:
             raise ValueError(f"no usable rows in manifest: {manifest_path}")
 
@@ -116,6 +124,42 @@ class ASRKDDataset(Dataset):
         elif self.require_span_kd:
             raise ValueError(f"missing teacher_span_kd_path: {row['audio_filepath']}")
 
+        if row.get("teacher_sctc_path"):
+            sc_path = Path(row["teacher_sctc_path"])
+            if not sc_path.is_absolute():
+                sc_path = self.manifest_path.parent / sc_path
+            sc = torch.load(sc_path, map_location="cpu", weights_only=False)
+            sample["sctc_gamma"] = sc["token_gamma"].float()      # (N, T)
+            sample["sctc_bpe_ids"] = sc["bpe_ids"].long()         # (N,)
+            sample["sctc_teacher_frames"] = int(sc["teacher_frames"])
+        elif self.require_sctc:
+            raise ValueError(f"missing teacher_sctc_path: {row['audio_filepath']}")
+
+        if row.get("boundary_kd_path"):
+            bd_path = Path(row["boundary_kd_path"])
+            if not bd_path.is_absolute():
+                bd_path = self.manifest_path.parent / bd_path
+            bd = torch.load(bd_path, map_location="cpu", weights_only=False)
+            sample["bd_res_t"] = bd["res_t"].long()      # (R,)
+            sample["bd_res_u"] = bd["res_u"].long()      # (R,)
+            sample["bd_res_r"] = bd["res_r"].float()     # (R,)
+            sample["bd_m_delta"] = bd["m_delta"].float()  # (T,)
+            sample["bd_m_zero"] = bd["m_zero"].float()    # (T,)
+            sample["bd_spike"] = bd["spike"].long()       # (N,)
+            sample["bd_y"] = bd["y"].long()               # (N,)
+            sample["bd_teacher_frames"] = int(bd["teacher_frames"])
+            sample["bd_num_tokens"] = int(bd["num_tokens"])
+            soft_rel = row.get("boundary_kd_soft_path")
+            if soft_rel:  # cell 1 only
+                sp = Path(soft_rel)
+                if not sp.is_absolute():
+                    sp = self.manifest_path.parent / sp
+                sd = torch.load(sp, map_location="cpu", weights_only=False)
+                sample["bd_soft_t"] = sd["soft_t"].long()     # (F,)
+                sample["bd_soft_p"] = sd["soft_p"].float()    # (F,V)
+        elif self.require_boundary_kd:
+            raise ValueError(f"missing boundary_kd_path: {row['audio_filepath']}")
+
         return sample
 
 
@@ -129,6 +173,9 @@ def collate_fn(batch):
     has_frame_kd = all("fkd_ids" in x and "fkd_probs" in x for x in batch)
     has_token_avg = all("tavg_seg_starts" in x for x in batch)
     has_span_kd = all("span_support" in x for x in batch)
+    has_sctc = all("sctc_gamma" in x for x in batch)
+    has_boundary_kd = all("bd_res_t" in x for x in batch)
+    has_boundary_soft = has_boundary_kd and all("bd_soft_p" in x for x in batch)
 
     wavs = torch.zeros(batch_size, wav_max, dtype=torch.float32)
     wav_lens = torch.zeros(batch_size, dtype=torch.long)
@@ -183,6 +230,34 @@ def collate_fn(batch):
         out["span_num_tokens"] = torch.zeros(batch_size, dtype=torch.long)
         out["span_teacher_frames"] = torch.zeros(batch_size, dtype=torch.long)
 
+    if has_sctc:
+        sctc_n_max = max(x["sctc_gamma"].shape[0] for x in batch)
+        sctc_t_max = max(x["sctc_gamma"].shape[1] for x in batch)
+        out["sctc_gamma"] = torch.zeros(batch_size, sctc_n_max, sctc_t_max, dtype=torch.float32)
+        out["sctc_bpe_ids"] = torch.zeros(batch_size, sctc_n_max, dtype=torch.long)
+        out["sctc_num_tokens"] = torch.zeros(batch_size, dtype=torch.long)
+        out["sctc_teacher_frames"] = torch.zeros(batch_size, dtype=torch.long)
+
+    if has_boundary_kd:
+        bd_r_max = max(x["bd_res_t"].numel() for x in batch)
+        bd_n_max = max(x["bd_num_tokens"] for x in batch)
+        bd_t_max = max(x["bd_teacher_frames"] for x in batch)
+        out["bd_res_t"] = torch.zeros(batch_size, bd_r_max, dtype=torch.long)
+        out["bd_res_u"] = torch.zeros(batch_size, bd_r_max, dtype=torch.long)
+        out["bd_res_r"] = torch.zeros(batch_size, bd_r_max, dtype=torch.float32)
+        out["bd_res_valid"] = torch.zeros(batch_size, bd_r_max, dtype=torch.bool)
+        out["bd_m_delta"] = torch.zeros(batch_size, bd_t_max, dtype=torch.float32)
+        out["bd_m_zero"] = torch.zeros(batch_size, bd_t_max, dtype=torch.float32)
+        out["bd_spike"] = torch.zeros(batch_size, bd_n_max, dtype=torch.long)
+        out["bd_y"] = torch.zeros(batch_size, bd_n_max, dtype=torch.long)
+        out["bd_num_tokens"] = torch.zeros(batch_size, dtype=torch.long)
+        out["bd_teacher_frames"] = torch.zeros(batch_size, dtype=torch.long)
+        if has_boundary_soft:
+            V = batch[0]["bd_soft_p"].shape[1]
+            bd_f_max = max(x["bd_soft_t"].numel() for x in batch)
+            out["bd_soft_t"] = torch.full((batch_size, bd_f_max), -1, dtype=torch.long)
+            out["bd_soft_p"] = torch.zeros(batch_size, bd_f_max, V, dtype=torch.float32)
+
     for i, sample in enumerate(batch):
         wav = sample["wav"]
         tok = sample["tokens"]
@@ -231,6 +306,32 @@ def collate_fn(batch):
             out["span_num_tokens"][i] = sn
             out["span_teacher_frames"][i] = sample["span_teacher_frames"]
 
+        if has_sctc:
+            gn, gt = sample["sctc_gamma"].shape
+            out["sctc_gamma"][i, :gn, :gt] = sample["sctc_gamma"]
+            out["sctc_bpe_ids"][i, :gn] = sample["sctc_bpe_ids"]
+            out["sctc_num_tokens"][i] = gn
+            out["sctc_teacher_frames"][i] = sample["sctc_teacher_frames"]
+
+        if has_boundary_kd:
+            rn = sample["bd_res_t"].numel()
+            tt = sample["bd_teacher_frames"]
+            nn = sample["bd_num_tokens"]
+            out["bd_res_t"][i, :rn] = sample["bd_res_t"]
+            out["bd_res_u"][i, :rn] = sample["bd_res_u"]
+            out["bd_res_r"][i, :rn] = sample["bd_res_r"]
+            out["bd_res_valid"][i, :rn] = True
+            out["bd_m_delta"][i, :tt] = sample["bd_m_delta"]
+            out["bd_m_zero"][i, :tt] = sample["bd_m_zero"]
+            out["bd_spike"][i, :nn] = sample["bd_spike"]
+            out["bd_y"][i, :nn] = sample["bd_y"]
+            out["bd_num_tokens"][i] = nn
+            out["bd_teacher_frames"][i] = tt
+            if has_boundary_soft:
+                fn = sample["bd_soft_t"].numel()
+                out["bd_soft_t"][i, :fn] = sample["bd_soft_t"]
+                out["bd_soft_p"][i, :fn] = sample["bd_soft_p"]
+
     return out
 
 
@@ -246,7 +347,9 @@ def make_dataloader(
     require_frame_kd=False,
     require_token_avg_kd=False,
     require_span_kd=False,
+    require_sctc=False,
     require_combined_kd=False,
+    require_boundary_kd=False,
 ):
     dataset = ASRKDDataset(
         manifest_path,
@@ -256,7 +359,9 @@ def make_dataloader(
         require_frame_kd=require_frame_kd,
         require_token_avg_kd=require_token_avg_kd,
         require_span_kd=require_span_kd,
+        require_sctc=require_sctc,
         require_combined_kd=require_combined_kd,
+        require_boundary_kd=require_boundary_kd,
     )
     return DataLoader(
         dataset,

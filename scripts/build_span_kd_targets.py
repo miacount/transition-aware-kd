@@ -92,9 +92,103 @@ def blank_penalty_logprobs(log_probs, blank_id, delta):
     return lp
 
 
+def edit_align_runs(tokens, run_ids):
+    """Align transcript token ids to greedy-run ids by minimum edit distance.
+    Returns per-token run index (diagonal moves only: exact match or
+    substitution) or -1 (token has no run: greedy deletion/merge)."""
+    N, M = len(tokens), len(run_ids)
+    dp = np.zeros((N + 1, M + 1), dtype=np.int32)
+    dp[:, 0] = np.arange(N + 1)
+    dp[0, :] = np.arange(M + 1)
+    for i in range(1, N + 1):
+        for j in range(1, M + 1):
+            sub = dp[i - 1, j - 1] + (0 if tokens[i - 1] == run_ids[j - 1] else 1)
+            dp[i, j] = min(sub, dp[i - 1, j] + 1, dp[i, j - 1] + 1)
+    match = [-1] * N
+    exact = [False] * N
+    i, j = N, M
+    while i > 0 and j > 0:
+        eq = tokens[i - 1] == run_ids[j - 1]
+        if dp[i, j] == dp[i - 1, j - 1] + (0 if eq else 1):
+            match[i - 1] = j - 1
+            exact[i - 1] = eq
+            i, j = i - 1, j - 1
+        elif dp[i, j] == dp[i - 1, j] + 1:
+            i -= 1
+        else:
+            j -= 1
+    return match, exact
+
+
+def segment_support(where_lp, bpe_ids, blank_id):
+    """No-FB WHERE, segment variant: cut the de-peaked argmax path into
+    contiguous non-blank runs (one run = one emitted occurrence), align the run
+    sequence to the transcript by edit distance, and weight each matched token
+    by the de-peaked posterior prob of its OWN id restricted to its run.
+    Occurrence-localized like FB gamma, but with greedy hard boundaries and no
+    sequence DP. Unmatched tokens get zero support (skipped by the train gate)."""
+    T = where_lp.shape[0]
+    path = where_lp.argmax(axis=1)
+    runs = []
+    t = 0
+    while t < T:
+        if path[t] == blank_id:
+            t += 1
+            continue
+        s, pid = t, path[t]
+        while t < T and path[t] == pid:
+            t += 1
+        runs.append((int(pid), s, t))
+    match, exact = edit_align_runs(list(bpe_ids), [r[0] for r in runs])
+    gamma = np.zeros((T, len(bpe_ids)))
+    probs = np.exp(where_lp)
+    for u, ri in enumerate(match):
+        if ri < 0:
+            continue
+        _, s, e = runs[ri]
+        gamma[s:e, u] = probs[s:e, bpe_ids[u]]
+    stats = {
+        "exact": sum(1 for m, ex in zip(match, exact) if m >= 0 and ex),
+        "subst": sum(1 for m, ex in zip(match, exact) if m >= 0 and not ex),
+        "unmatched": sum(1 for m in match if m < 0),
+    }
+    return gamma, stats
+
+
+def time_smooth_probs(probs, strength):
+    """Blend each frame's teacher posterior with its time-neighbours.
+
+    kernel = (strength/2, 1-strength, strength/2) along the time axis (axis 0),
+    edges replicated. Unlike temperature (which flattens WITHIN a frame, leaking
+    mass to meaningless tokens), this spreads mass to the SAME token's neighbour
+    frames — i.e. tokens that actually occur in the local context. strength=0.5
+    reproduces the classic (0.25, 0.5, 0.25) kernel.
+    """
+    if strength <= 0.0:
+        return probs
+    left = np.concatenate([probs[:1], probs[:-1]], axis=0)
+    right = np.concatenate([probs[1:], probs[-1:]], axis=0)
+    s = 0.5 * strength
+    return s * left + (1.0 - strength) * probs + s * right
+
+
+def label_prior_logprobs(log_probs, log_prior, alpha):
+    """De-peak via label priors (Huang et al. 2024): subtract alpha*log_prior[k]
+    from every token k, then renormalize. Frequent labels (esp. blank) are
+    downweighted most. UNLIKE blank-only delta, this reweights non-blank tokens
+    by their own priors too (rare tokens boosted) -> changes non-blank ratios."""
+    if alpha == 0.0:
+        return log_probs
+    lp = log_probs - alpha * log_prior.reshape(1, -1)
+    m = np.max(lp, axis=-1, keepdims=True)
+    lp = lp - (m + np.log(np.exp(lp - m).sum(axis=-1, keepdims=True)))
+    return lp
+
+
 def teacher_semantic_topk(teacher_lp, teacher_gamma, blank_id, top_k, support=None,
-                          keep_blank=False):
+                          keep_blank=False, time_smooth=0.0, mask_neighbor_ids=None):
     probs = np.exp(teacher_lp)
+    probs = time_smooth_probs(probs, time_smooth)
     out_ids = []
     out_probs = []
     for u in range(teacher_gamma.shape[1]):
@@ -107,6 +201,12 @@ def teacher_semantic_topk(teacher_lp, teacher_gamma, blank_id, top_k, support=No
             q[blank_id] = 0.0   # default: drop blank, keep only "which token"
         # keep_blank=True: leave blank in q so the target also encodes
         # "how present vs gap" (span-level occupancy) for this token.
+        if mask_neighbor_ids is not None:
+            # neighbour mass at span edges is alignment leakage, not dark
+            # knowledge: zero the adjacent transcript tokens so widening the
+            # span (larger delta) cannot contaminate the target.
+            for v in mask_neighbor_ids[u]:
+                q[v] = 0.0
         q = q / max(float(q.sum()), 1e-12)
         k = min(top_k, q.shape[0])
         idx = np.argpartition(q, -k)[-k:]
@@ -154,6 +254,43 @@ def main():
         help="teacher-only mode: nats subtracted from blank log-prob before FB (0=peaky).",
     )
     ap.add_argument(
+        "--where-mode", choices=["fb", "posterior", "segment"], default="fb",
+        help="teacher-only mode: how to turn the de-peaked posterior into per-token "
+             "support. fb = transcript-constrained forward-backward gamma (default). "
+             "posterior = NO forward-backward: support(t,u) is simply the de-peaked "
+             "posterior probability of token u's id at frame t (type-global: repeated "
+             "ids share one weight column). segment = NO forward-backward but "
+             "occurrence-localized: greedy non-blank runs of the de-peaked argmax "
+             "path are edit-aligned to the transcript, and each token is weighted "
+             "by its own id's de-peaked prob INSIDE its run only.",
+    )
+    ap.add_argument(
+        "--teacher-label-prior-alpha", type=float, default=0.0,
+        help="teacher-only mode: de-peak the WHERE occupancy via label priors "
+             "(Huang 2024): where_lp = raw - alpha*log_prior, instead of blank-only "
+             "delta. Reweights non-blank tokens by their priors too. 0=off (use delta). "
+             "Ablation of the blank-only design choice (D3).",
+    )
+    ap.add_argument(
+        "--prior-sample", type=int, default=300,
+        help="utterances used to estimate the global label prior (mean teacher posterior).",
+    )
+    ap.add_argument(
+        "--teacher-time-smooth", type=float, default=0.0,
+        help="blend teacher posterior with time-neighbours before building the "
+             "semantic top-k (WHAT). kernel (s/2, 1-s, s/2); 0.5 = (0.25,0.5,0.25). "
+             "0 = off. Softens the distilled target toward local-context tokens "
+             "without leaking mass to meaningless tokens the way temperature does.",
+    )
+    ap.add_argument(
+        "--mask-neighbor-tokens", action="store_true",
+        help="teacher-only mode: zero the immediate transcript neighbours "
+             "(y_{u-1}, y_{u+1}) in each token's semantic top-k target before "
+             "renormalizing. Removes alignment leakage at span edges, making "
+             "wide spans (large --teacher-blank-penalty) safe by construction. "
+             "Neighbours equal to the token itself are kept.",
+    )
+    ap.add_argument(
         "--keep-blank", action="store_true",
         help="keep blank in the per-token semantic target top-k (target encodes "
              "'which token + how present vs gap'), instead of dropping it.",
@@ -183,10 +320,26 @@ def main():
     sample_rate = int(teacher.cfg.preprocessor.sample_rate)
     tokenizer = SentencePieceTokenizer(model_path=os.path.join(args.tokenizer, "tokenizer.model"))
 
+    # Estimate global label prior (mean teacher posterior over frames) if requested.
+    label_log_prior = None
+    if args.teacher_only and args.teacher_label_prior_alpha > 0.0:
+        acc = np.zeros(teacher.decoder.num_classes_with_blank, dtype=np.float64)
+        nfr = 0
+        for r in rows[:args.prior_sample]:
+            wav = load_audio(r["audio_filepath"], sample_rate)
+            lp = run_teacher(teacher, wav, args.device)
+            acc += np.exp(lp).sum(axis=0)
+            nfr += lp.shape[0]
+        prior = acc / max(nfr, 1)
+        label_log_prior = np.log(prior + 1e-12)
+        print(f"[teacher-only] label-prior alpha={args.teacher_label_prior_alpha} "
+              f"(prior p(blank)={prior[bpe_blank]:.3f}, {args.prior_sample} utts)")
+
     where_model = None
     if args.teacher_only:
         phone_model = phone_to_id = phone_blank = phone_alpha = phone_log_priors = lexicon = None
-        print(f"[teacher-only] blank_penalty={args.teacher_blank_penalty} nats, no phoneme aligner")
+        if label_log_prior is None:
+            print(f"[teacher-only] blank_penalty={args.teacher_blank_penalty} nats, no phoneme aligner")
         if args.where_model:
             where_model = nemo_asr.models.EncDecCTCModelBPE.restore_from(args.where_model).to(args.device).eval()
             where_model.freeze()
@@ -205,6 +358,7 @@ def main():
 
     kept = 0
     reused = 0
+    seg_totals = {}
     skipped = {"lexicon": 0, "mapping": 0, "empty": 0}
     gate_means = []
     coverage_p10 = []
@@ -226,12 +380,30 @@ def main():
                 # align WHERE frame count to teacher frame count if they differ
                 if where_lp.shape[0] != teacher_lp.shape[0]:
                     where_lp = resample_time(where_lp, teacher_lp.shape[0])
+            elif label_log_prior is not None:
+                where_lp = label_prior_logprobs(teacher_lp, label_log_prior, args.teacher_label_prior_alpha)
             else:
                 where_lp = blank_penalty_logprobs(teacher_lp, bpe_blank, args.teacher_blank_penalty)
-            gamma = ctc_forward_backward(where_lp, bpe_ids, bpe_blank)["token_gamma"]  # (T, N) WHERE
+            if args.where_mode == "posterior":
+                # no-FB ablation: support = de-peaked posterior prob of each token's id,
+                # per frame. No occurrence assignment, no monotonicity.
+                gamma = np.exp(where_lp[:, bpe_ids])                           # (T, N)
+            elif args.where_mode == "segment":
+                gamma, seg_stats = segment_support(where_lp, bpe_ids, bpe_blank)
+                for k in seg_stats:
+                    seg_totals[k] = seg_totals.get(k, 0) + seg_stats[k]
+            else:
+                gamma = ctc_forward_backward(where_lp, bpe_ids, bpe_blank)["token_gamma"]  # (T, N) WHERE
             # WHAT: sharp original-teacher posterior, weighted by that gamma for locality
+            neighbor_ids = None
+            if args.mask_neighbor_tokens:
+                neighbor_ids = [
+                    {n for n in (bpe_ids[u - 1:u] + bpe_ids[u + 1:u + 2]) if n != bpe_ids[u]}
+                    for u in range(len(bpe_ids))
+                ]
             avg_ids, avg_probs = teacher_semantic_topk(
-                teacher_lp, gamma, bpe_blank, args.top_k, keep_blank=args.keep_blank)
+                teacher_lp, gamma, bpe_blank, args.top_k, keep_blank=args.keep_blank,
+                time_smooth=args.teacher_time_smooth, mask_neighbor_ids=neighbor_ids)
             gates = np.ones(len(bpe_ids), dtype=np.float32)             # teacher-only: no aligner disagreement
             torch.save(
                 {
@@ -243,6 +415,10 @@ def main():
                     "num_tokens": int(len(bpe_ids)),
                     "top_k": int(args.top_k),
                     "teacher_blank_penalty": float(args.teacher_blank_penalty),
+                    "where_mode": args.where_mode,
+                    "teacher_time_smooth": float(args.teacher_time_smooth),
+                    "teacher_label_prior_alpha": float(args.teacher_label_prior_alpha),
+                    "mask_neighbor_tokens": bool(args.mask_neighbor_tokens),
                     "mode": "teacher_only",
                 },
                 manifest_dir / rel,
@@ -314,6 +490,7 @@ def main():
             bpe_blank,
             args.top_k,
             support=target_support,
+            time_smooth=args.teacher_time_smooth,
         )
 
         torch.save(
@@ -348,6 +525,10 @@ def main():
     print(f"kept              : {kept}")
     print(f"reused            : {reused}")
     print(f"skipped           : {skipped}")
+    if seg_totals:
+        tot = sum(seg_totals.values())
+        print(f"segment align     : {seg_totals} "
+              f"(unmatched {seg_totals.get('unmatched', 0) / max(tot, 1):.2%})")
     if gate_means:
         print(f"gate mean avg     : {np.mean(gate_means):.4f}")
         print(f"gate p10 avg      : {np.mean(coverage_p10):.4f}")

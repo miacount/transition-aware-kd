@@ -20,11 +20,17 @@ done
 mkdir -p analysis
 if [[ -z "$NAME" ]]; then NAME="$(basename "$CKPT" .ckpt)"; fi
 
+# Eval manifests default to LibriSpeech; override with EVAL_MANIFESTS
+# (space-separated name=path pairs) for other datasets, e.g. TED-LIUM.
+if [[ -z "${EVAL_MANIFESTS:-}" ]]; then
+  EVAL_MANIFESTS="dev_clean=data/dev_clean.json dev_other=data/dev_other.json \
+test_clean=data/test_clean.json test_other=data/test_other.json"
+fi
+MANIFEST_ARGS=()
+for pair in $EVAL_MANIFESTS; do MANIFEST_ARGS+=(--manifest "$pair"); done
+
 python scripts/evaluate_student.py \
   --config "$CONFIG" \
   --ckpt "$CKPT" \
-  --manifest dev_clean=data/dev_clean.json \
-  --manifest dev_other=data/dev_other.json \
-  --manifest test_clean=data/test_clean.json \
-  --manifest test_other=data/test_other.json \
+  "${MANIFEST_ARGS[@]}" \
   | tee "analysis/eval_${NAME}.txt"

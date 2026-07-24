@@ -22,7 +22,18 @@ def load_model(config_path, ckpt_path, device):
     model = TransitionKDModel(cfg=model_cfg, trainer=None)
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state = ckpt.get("state_dict", ckpt)
-    model.load_state_dict(state, strict=False)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing:
+        print(f"[load_model] MISSING keys ({len(missing)}): {missing[:8]}{' ...' if len(missing) > 8 else ''}")
+    if unexpected:
+        print(f"[load_model] UNEXPECTED keys ({len(unexpected)}): {unexpected[:8]}{' ...' if len(unexpected) > 8 else ''}")
+    core_bad = [k for k in list(missing) + list(unexpected)
+                if k.startswith(("encoder.", "decoder."))]
+    if core_bad:
+        raise RuntimeError(
+            f"config/checkpoint architecture mismatch: {len(core_bad)} encoder/decoder "
+            f"keys failed to load (e.g. {core_bad[:3]}). Pass the config the checkpoint "
+            f"was trained with (e.g. --config configs/student_sub8.yaml for sub8 runs).")
     return model.to(device).eval(), cfg
 
 

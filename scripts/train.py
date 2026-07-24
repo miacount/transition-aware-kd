@@ -17,6 +17,12 @@ from model import TransitionKDModel
 @hydra.main(version_base=None, config_path="../configs", config_name="student_base")
 def main(cfg):
     logging.info("\n" + OmegaConf.to_yaml(cfg))
+    # Reproducibility: fix all RNGs (data shuffle, weight init, augmentation) so
+    # ablation deltas reflect the config change, not seed noise. Set model.seed=N
+    # to vary. Default 1. Single-run noise here is ~±0.2-0.3 WER, so effect sizes
+    # below that need multiple seeds to be meaningful.
+    seed = int(cfg.model.get("seed", 1))
+    pl.seed_everything(seed, workers=True)
     trainer = pl.Trainer(logger=False, **cfg.trainer)
     exp_manager(trainer, cfg.get("exp_manager", None))
 
@@ -32,7 +38,7 @@ def main(cfg):
     init_ckpt = cfg.get("init_from_checkpoint", None)
     if init_ckpt:
         logging.info(f"Initializing model weights from: {init_ckpt}")
-        ckpt = torch.load(init_ckpt, map_location="cpu")
+        ckpt = torch.load(init_ckpt, map_location="cpu", weights_only=False)
         missing, unexpected = model.load_state_dict(ckpt["state_dict"], strict=False)
         if missing:
             logging.warning(f"  Missing keys: {missing}")
