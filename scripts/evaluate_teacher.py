@@ -2,7 +2,7 @@
 """Greedy corpus WER of a pretrained NeMo teacher on manifest(s).
 
 Used to establish the KD ceiling on a new dataset before building targets
-(cf. METHOD_REPORT §0: teacher 3.70/8.14 on LibriSpeech test-clean/other).
+(cf. analysis/PAPER_STORYLINE_AND_METHOD.md: teacher 3.70/8.14 on LibriSpeech test-clean/other).
 
 Usage:
   python scripts/evaluate_teacher.py \
@@ -25,7 +25,9 @@ def main():
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = ASRModel.from_pretrained(args.teacher, map_location=device)
+    model = (ASRModel.restore_from(args.teacher, map_location=device)
+             if args.teacher.endswith(".nemo")
+             else ASRModel.from_pretrained(args.teacher, map_location=device))
     model.eval()
 
     for spec in args.manifest:

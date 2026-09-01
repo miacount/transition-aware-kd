@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+source experiments/paper_suite_common.sh
+
+D0=data/train_clean_100.teacher_only_d0_mass3_ntdk_m32.json
+D6=data/train_clean_100.teacher_only_d6_mass3_ntdk_m32.json
+require_file "$D0"
+require_file "$D6"
+
+run_seed_delta() {
+  local seed="$1" delta="$2" manifest="$3"
+  local name="ablation-lbs-full-d${delta}-mass25-ntdk8-s${seed}"
+  if experiment_complete "$name" 100; then
+    echo "=== [reuse] $name ==="
+    return 0
+  fi
+  local resume_args=() resume_ckpt resume_version
+  resume_ckpt=$(latest_last_ckpt "$name")
+  if [[ -n "$resume_ckpt" ]]; then
+    resume_version=$(basename "$(dirname "$(dirname "$resume_ckpt")")")
+    resume_args=(--resume-version "$resume_version")
+    echo "=== [resume] $name from $resume_ckpt ==="
+  else
+    echo "=== [train] $name ==="
+  fi
+  bash experiments/train.sh \
+    --name "$name" --epochs 100 --seed "$seed" --config student_base \
+    --manifest "$manifest" --kd-mode span_kd \
+    --kd-weight 25 --span-primary-mode mass3 --span-ntdk-weight 8 \
+    "${resume_args[@]}"
+}
+
+for seed in 2 3 4 5; do
+  run_seed_delta "$seed" 0 "$D0"
+  run_seed_delta "$seed" 6 "$D6"
+done

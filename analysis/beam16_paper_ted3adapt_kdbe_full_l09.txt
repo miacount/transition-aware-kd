@@ -1,0 +1,23 @@
+[NeMo I 2026-08-05 01:32:23 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo I 2026-08-05 01:32:23 nemo_logging:393] 
+    Replacing placeholder number of classes (-1) with actual number of classes - 1024
+[NeMo I 2026-08-05 01:32:23 nemo_logging:393] PADDING: 0
+model=ted3adapt_kdbe_full_l09
+checkpoint=nemo_experiments/paper-ted3adapt-kdbe-full-l09-s1/2026-08-03_19-33-42/checkpoints/paper-ted3adapt-kdbe-full-l09-s1--val_wer=0.1929-epoch=49.ckpt
+beam_width=16 beam_prune_logp=-10.0 token_min_logp=-5.0 workers=8
+
+[ted3_dev]
+  progress utterances=320 elapsed=1.5s
+utterances=507 CTC_loss=39.7406
+greedy   WER=19.2656% INS=4.6505%(827) DEL=1.6083%(286) SUB=13.0068%(2313) REF_WORDS=17783
+beam     WER=18.8944% INS=4.3637%(776) DEL=1.5071%(268) SUB=13.0237%(2316) REF_WORDS=17783
+beam_minus_greedy_WER=-0.3711%p
+
+[ted3_test]
+  progress utterances=320 elapsed=1.0s
+  progress utterances=640 elapsed=1.5s
+  progress utterances=960 elapsed=2.3s
+utterances=1155 CTC_loss=24.7016
+greedy   WER=18.6800% INS=4.2945%(1181) DEL=1.9600%(539) SUB=12.4255%(3417) REF_WORDS=27500
+beam     WER=18.6073% INS=4.0836%(1123) DEL=1.8073%(497) SUB=12.7164%(3497) REF_WORDS=27500
+beam_minus_greedy_WER=-0.0727%p

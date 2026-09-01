@@ -22,6 +22,7 @@ class ASRKDDataset(Dataset):
         manifest_path,
         tokenizer,
         sample_rate=16000,
+        max_duration=None,
         require_transition=False,
         require_frame_kd=False,
         require_token_avg_kd=False,
@@ -29,9 +30,13 @@ class ASRKDDataset(Dataset):
         require_sctc=False,
         require_combined_kd=False,
         require_boundary_kd=False,
+        require_free_emit=False,
+        require_carl_feature=False,
     ):
         self.manifest_path = Path(manifest_path)
         self.rows = read_manifest(manifest_path)
+        if max_duration is not None:
+            self.rows = [r for r in self.rows if float(r.get("duration", 0.0)) <= float(max_duration)]
         self.tokenizer = tokenizer
         self.sample_rate = sample_rate
         self.require_transition = require_transition
@@ -40,6 +45,8 @@ class ASRKDDataset(Dataset):
         self.require_span_kd = require_span_kd
         self.require_sctc = require_sctc
         self.require_boundary_kd = require_boundary_kd
+        self.require_carl_feature = require_carl_feature
+        self.require_free_emit = require_free_emit
         if require_transition:
             self.rows = [r for r in self.rows if r.get("teacher_target")]
         if self.require_frame_kd:
@@ -52,6 +59,10 @@ class ASRKDDataset(Dataset):
             self.rows = [r for r in self.rows if r.get("teacher_sctc_path")]
         if self.require_boundary_kd:
             self.rows = [r for r in self.rows if r.get("boundary_kd_path")]
+        if self.require_free_emit:
+            self.rows = [r for r in self.rows if r.get("teacher_free_emit_path")]
+        if self.require_carl_feature:
+            self.rows = [r for r in self.rows if r.get("teacher_carl_path")]
         if not self.rows:
             raise ValueError(f"no usable rows in manifest: {manifest_path}")
 
@@ -81,13 +92,16 @@ class ASRKDDataset(Dataset):
         elif self.require_transition:
             raise ValueError(f"missing teacher_target: {row['audio_filepath']}")
 
-        if row.get("teacher_frame_kd_path"):
+        if self.require_frame_kd and row.get("teacher_frame_kd_path"):
             kd_path = Path(row["teacher_frame_kd_path"])
             if not kd_path.is_absolute():
                 kd_path = self.manifest_path.parent / kd_path
             kd = torch.load(kd_path, map_location="cpu", weights_only=False)
-            sample["fkd_ids"] = kd["ids"].long()
-            sample["fkd_probs"] = kd["probs"].float()
+            if "dense_probs" in kd:
+                sample["fkd_dense_probs"] = kd["dense_probs"].float()
+            else:
+                sample["fkd_ids"] = kd["ids"].long()
+                sample["fkd_probs"] = kd["probs"].float()
         elif self.require_frame_kd:
             raise ValueError(f"missing teacher_frame_kd_path: {row['audio_filepath']}")
 
@@ -121,6 +135,35 @@ class ASRKDDataset(Dataset):
             sample["span_avg_probs"] = sp["avg_probs"].float()
             sample["span_gates"] = sp["gates"].float()
             sample["span_teacher_frames"] = int(sp["teacher_frames"])
+            if "dark_ids" in sp:
+                sample["span_dark_ids"] = sp["dark_ids"].long()
+                sample["span_dark_probs"] = sp["dark_probs"].float()
+                sample["span_dark_tail_prob"] = sp["dark_tail_prob"].float()
+                if "mass3_probs" in sp:
+                    sample["span_mass3_probs"] = sp["mass3_probs"].float()
+            elif row.get("teacher_span_dark_path"):
+                dark_path = Path(row["teacher_span_dark_path"])
+                if not dark_path.is_absolute():
+                    dark_path = self.manifest_path.parent / dark_path
+                dark = torch.load(dark_path, map_location="cpu", weights_only=False)
+                sample["span_dark_ids"] = dark["dark_ids"].long()
+                sample["span_dark_probs"] = dark["dark_probs"].float()
+                sample["span_dark_tail_prob"] = dark["dark_tail_prob"].float()
+                if "mass3_probs" in dark:
+                    sample["span_mass3_probs"] = dark["mass3_probs"].float()
+            shoulder_rel = row.get("teacher_span_shoulder_path")
+            if shoulder_rel:
+                shoulder_path = Path(shoulder_rel)
+                if not shoulder_path.is_absolute():
+                    shoulder_path = self.manifest_path.parent / shoulder_path
+                shoulder = torch.load(shoulder_path, map_location="cpu", weights_only=False)
+                sample["span_expanded_support"] = shoulder["support"].float()
+                if int(shoulder["teacher_frames"]) != sample["span_teacher_frames"]:
+                    raise ValueError(
+                        f"core/expanded support frame mismatch: {sp_path} vs {shoulder_path}")
+                if shoulder["support"].shape != sample["span_support"].shape:
+                    raise ValueError(
+                        f"core/expanded support shape mismatch: {sp_path} vs {shoulder_path}")
         elif self.require_span_kd:
             raise ValueError(f"missing teacher_span_kd_path: {row['audio_filepath']}")
 
@@ -160,6 +203,29 @@ class ASRKDDataset(Dataset):
         elif self.require_boundary_kd:
             raise ValueError(f"missing boundary_kd_path: {row['audio_filepath']}")
 
+        if row.get("teacher_free_emit_path"):
+            fe_path = Path(row["teacher_free_emit_path"])
+            if not fe_path.is_absolute():
+                fe_path = self.manifest_path.parent / fe_path
+            fe = torch.load(fe_path, map_location="cpu", weights_only=False)
+            sample["fe_token_ids"] = fe["token_ids"].long()
+            sample["fe_starts"] = fe["starts"].long()
+            sample["fe_ends"] = fe["ends"].long()
+            sample["fe_types"] = fe["types"].long()
+            sample["fe_teacher_frames"] = int(fe["teacher_frames"])
+        elif self.require_free_emit:
+            raise ValueError(f"missing teacher_free_emit_path: {row['audio_filepath']}")
+
+        if row.get("teacher_carl_path"):
+            carl_path = Path(row["teacher_carl_path"])
+            if not carl_path.is_absolute():
+                carl_path = self.manifest_path.parent / carl_path
+            carl = torch.load(carl_path, map_location="cpu", weights_only=False)
+            sample["carl_features"] = carl["features"].float()
+            sample["carl_teacher_frames"] = int(carl.get("frames", carl["features"].shape[0]))
+        elif self.require_carl_feature:
+            raise ValueError(f"missing teacher_carl_path: {row['audio_filepath']}")
+
         return sample
 
 
@@ -170,14 +236,25 @@ def collate_fn(batch):
     wav_max = max(x["wav"].numel() for x in batch)
     tok_max = max(x["tokens"].numel() for x in batch)
     has_transition = all("ttarget" in x for x in batch)
-    has_frame_kd = all("fkd_ids" in x and "fkd_probs" in x for x in batch)
+    has_frame_kd_sparse = all("fkd_ids" in x and "fkd_probs" in x for x in batch)
+    has_frame_kd_dense = all("fkd_dense_probs" in x for x in batch)
+    has_any_frame_kd = any("fkd_ids" in x or "fkd_dense_probs" in x for x in batch)
+    has_frame_kd = has_frame_kd_sparse or has_frame_kd_dense
     has_token_avg = all("tavg_seg_starts" in x for x in batch)
     has_span_kd = all("span_support" in x for x in batch)
+    has_span_dark = has_span_kd and all("span_dark_ids" in x for x in batch)
+    has_span_mass3 = has_span_kd and all("span_mass3_probs" in x for x in batch)
+    has_span_shoulder = has_span_kd and all("span_expanded_support" in x for x in batch)
     has_sctc = all("sctc_gamma" in x for x in batch)
     has_boundary_kd = all("bd_res_t" in x for x in batch)
     has_boundary_soft = has_boundary_kd and all("bd_soft_p" in x for x in batch)
+    has_carl_feature = all("carl_features" in x for x in batch)
+    has_free_emit = all("fe_starts" in x for x in batch)
 
     wavs = torch.zeros(batch_size, wav_max, dtype=torch.float32)
+    if has_any_frame_kd and not has_frame_kd:
+        raise ValueError("mixed sparse/dense frame-KD targets in one batch")
+
     wav_lens = torch.zeros(batch_size, dtype=torch.long)
     tokens = torch.zeros(batch_size, tok_max, dtype=torch.long)
     token_lens = torch.zeros(batch_size, dtype=torch.long)
@@ -194,11 +271,17 @@ def collate_fn(batch):
         out["ttargets"] = torch.zeros(batch_size, tgt_max, dtype=torch.long)
         out["ttarget_lens"] = torch.zeros(batch_size, dtype=torch.long)
 
-    if has_frame_kd:
+    if has_frame_kd_sparse:
         frame_max = max(x["fkd_ids"].shape[0] for x in batch)
         topk_max = max(x["fkd_ids"].shape[1] for x in batch)
         out["fkd_ids"] = torch.zeros(batch_size, frame_max, topk_max, dtype=torch.long)
         out["fkd_probs"] = torch.zeros(batch_size, frame_max, topk_max, dtype=torch.float32)
+        out["fkd_lens"] = torch.zeros(batch_size, dtype=torch.long)
+    elif has_frame_kd_dense:
+        frame_max = max(x["fkd_dense_probs"].shape[0] for x in batch)
+        vocab_size = batch[0]["fkd_dense_probs"].shape[1]
+        out["fkd_dense_probs"] = torch.zeros(
+            batch_size, frame_max, vocab_size, dtype=torch.float32)
         out["fkd_lens"] = torch.zeros(batch_size, dtype=torch.long)
 
     has_trans_kd = has_token_avg and all("tavg_trans_left_ids" in x for x in batch)
@@ -224,11 +307,25 @@ def collate_fn(batch):
         span_t_max = max(x["span_support"].shape[1] for x in batch)
         span_topk_max = max(x["span_avg_ids"].shape[1] for x in batch)
         out["span_support"] = torch.zeros(batch_size, span_n_max, span_t_max, dtype=torch.float32)
+        if has_span_shoulder:
+            out["span_expanded_support"] = torch.zeros(
+                batch_size, span_n_max, span_t_max, dtype=torch.float32)
         out["span_avg_ids"] = torch.zeros(batch_size, span_n_max, span_topk_max, dtype=torch.long)
         out["span_avg_probs"] = torch.zeros(batch_size, span_n_max, span_topk_max, dtype=torch.float32)
         out["span_gates"] = torch.zeros(batch_size, span_n_max, dtype=torch.float32)
         out["span_num_tokens"] = torch.zeros(batch_size, dtype=torch.long)
         out["span_teacher_frames"] = torch.zeros(batch_size, dtype=torch.long)
+        if has_span_dark:
+            span_dark_m = max(x["span_dark_ids"].shape[1] for x in batch)
+            out["span_dark_ids"] = torch.zeros(
+                batch_size, span_n_max, span_dark_m, dtype=torch.long)
+            out["span_dark_probs"] = torch.zeros(
+                batch_size, span_n_max, span_dark_m, dtype=torch.float32)
+            out["span_dark_tail_prob"] = torch.zeros(
+                batch_size, span_n_max, dtype=torch.float32)
+        if has_span_mass3:
+            out["span_mass3_probs"] = torch.zeros(
+                batch_size, span_n_max, 3, dtype=torch.float32)
 
     if has_sctc:
         sctc_n_max = max(x["sctc_gamma"].shape[0] for x in batch)
@@ -258,6 +355,23 @@ def collate_fn(batch):
             out["bd_soft_t"] = torch.full((batch_size, bd_f_max), -1, dtype=torch.long)
             out["bd_soft_p"] = torch.zeros(batch_size, bd_f_max, V, dtype=torch.float32)
 
+    if has_free_emit:
+        fe_max = max(x["fe_starts"].numel() for x in batch)
+        out["fe_token_ids"] = torch.zeros(batch_size, fe_max, dtype=torch.long)
+        out["fe_starts"] = torch.zeros(batch_size, fe_max, dtype=torch.long)
+        out["fe_ends"] = torch.zeros(batch_size, fe_max, dtype=torch.long)
+        out["fe_types"] = torch.zeros(batch_size, fe_max, dtype=torch.long)
+        out["fe_num_targets"] = torch.zeros(batch_size, dtype=torch.long)
+        out["fe_teacher_frames"] = torch.zeros(batch_size, dtype=torch.long)
+
+    if has_carl_feature:
+        carl_t_max = max(x["carl_features"].shape[0] for x in batch)
+        carl_dim = batch[0]["carl_features"].shape[1]
+        if any(x["carl_features"].shape[1] != carl_dim for x in batch):
+            raise ValueError("mixed CARL teacher feature dimensions in one batch")
+        out["carl_features"] = torch.zeros(batch_size, carl_t_max, carl_dim, dtype=torch.float32)
+        out["carl_teacher_frames"] = torch.zeros(batch_size, dtype=torch.long)
+
     for i, sample in enumerate(batch):
         wav = sample["wav"]
         tok = sample["tokens"]
@@ -271,12 +385,17 @@ def collate_fn(batch):
             out["ttargets"][i, : tgt.numel()] = tgt
             out["ttarget_lens"][i] = tgt.numel()
 
-        if has_frame_kd:
+        if has_frame_kd_sparse:
             ids = sample["fkd_ids"]
             probs = sample["fkd_probs"]
             frames, topk = ids.shape
             out["fkd_ids"][i, :frames, :topk] = ids
             out["fkd_probs"][i, :frames, :topk] = probs
+            out["fkd_lens"][i] = frames
+        elif has_frame_kd_dense:
+            probs = sample["fkd_dense_probs"]
+            frames = probs.shape[0]
+            out["fkd_dense_probs"][i, :frames] = probs
             out["fkd_lens"][i] = frames
 
         if has_token_avg:
@@ -300,11 +419,20 @@ def collate_fn(batch):
             sn, sf = sample["span_support"].shape
             stk = sample["span_avg_ids"].shape[1]
             out["span_support"][i, :sn, :sf] = sample["span_support"]
+            if has_span_shoulder:
+                out["span_expanded_support"][i, :sn, :sf] = sample["span_expanded_support"]
             out["span_avg_ids"][i, :sn, :stk] = sample["span_avg_ids"]
             out["span_avg_probs"][i, :sn, :stk] = sample["span_avg_probs"]
             out["span_gates"][i, :sn] = sample["span_gates"]
             out["span_num_tokens"][i] = sn
             out["span_teacher_frames"][i] = sample["span_teacher_frames"]
+            if has_span_dark:
+                dm = sample["span_dark_ids"].shape[1]
+                out["span_dark_ids"][i, :sn, :dm] = sample["span_dark_ids"]
+                out["span_dark_probs"][i, :sn, :dm] = sample["span_dark_probs"]
+                out["span_dark_tail_prob"][i, :sn] = sample["span_dark_tail_prob"]
+            if has_span_mass3:
+                out["span_mass3_probs"][i, :sn] = sample["span_mass3_probs"]
 
         if has_sctc:
             gn, gt = sample["sctc_gamma"].shape
@@ -332,6 +460,20 @@ def collate_fn(batch):
                 out["bd_soft_t"][i, :fn] = sample["bd_soft_t"]
                 out["bd_soft_p"][i, :fn] = sample["bd_soft_p"]
 
+        if has_free_emit:
+            n = sample["fe_starts"].numel()
+            out["fe_token_ids"][i, :n] = sample["fe_token_ids"]
+            out["fe_starts"][i, :n] = sample["fe_starts"]
+            out["fe_ends"][i, :n] = sample["fe_ends"]
+            out["fe_types"][i, :n] = sample["fe_types"]
+            out["fe_num_targets"][i] = n
+            out["fe_teacher_frames"][i] = sample["fe_teacher_frames"]
+
+        if has_carl_feature:
+            frames = sample["carl_features"].shape[0]
+            out["carl_features"][i, :frames] = sample["carl_features"]
+            out["carl_teacher_frames"][i] = sample["carl_teacher_frames"]
+
     return out
 
 
@@ -341,6 +483,7 @@ def make_dataloader(
     batch_size,
     shuffle,
     sample_rate=16000,
+    max_duration=None,
     num_workers=4,
     pin_memory=True,
     require_transition=False,
@@ -350,11 +493,14 @@ def make_dataloader(
     require_sctc=False,
     require_combined_kd=False,
     require_boundary_kd=False,
+    require_carl_feature=False,
+    require_free_emit=False,
 ):
     dataset = ASRKDDataset(
         manifest_path,
         tokenizer,
         sample_rate=sample_rate,
+        max_duration=max_duration,
         require_transition=require_transition,
         require_frame_kd=require_frame_kd,
         require_token_avg_kd=require_token_avg_kd,
@@ -362,6 +508,8 @@ def make_dataloader(
         require_sctc=require_sctc,
         require_combined_kd=require_combined_kd,
         require_boundary_kd=require_boundary_kd,
+        require_carl_feature=require_carl_feature,
+        require_free_emit=require_free_emit,
     )
     return DataLoader(
         dataset,

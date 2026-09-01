@@ -46,7 +46,11 @@ from analyze_mfa_occupancy import (  # noqa: E402
 
 
 
-def load_student(path, device):
+def load_student(path, config, device):
+    if path.endswith(".ckpt"):
+        from evaluate_student import load_model
+        model, _ = load_model(config, path, torch.device(device))
+        return model.eval()
     import nemo.collections.asr as nemo_asr
     m = nemo_asr.models.EncDecCTCModelBPE.restore_from(path, map_location=device)
     return m.to(device).eval()
@@ -57,6 +61,7 @@ def main():
     ap.add_argument("--manifest", default="data/test_clean.json")
     ap.add_argument("--teacher", default="stt_en_conformer_ctc_small")
     ap.add_argument("--tokenizer", default="tokenizer_1024")
+    ap.add_argument("--config", default="configs/student_base.yaml")
     ap.add_argument("--students", nargs="+", default=[
         "no-KD=nemo_experiments/student-no-kd/2026-06-24_04-38-47/checkpoints/student-no-kd.nemo",
         "ATD (δ=6, w=20)=nemo_experiments/span-kd-teacher-d6-w20.0/2026-07-02_14-03-36/"
@@ -71,7 +76,7 @@ def main():
 
     deltas = [float(d) for d in args.deltas.split(",")]
     assert deltas[0] == 0.0, "first delta must be 0 (frame-KD reference)"
-    students = [s.rsplit("=", 1) for s in args.students]   # names may contain '='
+    students = [s.split("=", 1) for s in args.students]   # names may contain '='
 
     import nemo.collections.asr as nemo_asr
     from nemo.collections.common.tokenizers.sentencepiece_tokenizer import SentencePieceTokenizer
@@ -83,11 +88,12 @@ def main():
     sr = int(teacher.cfg.preprocessor.sample_rate)
     tokenizer = SentencePieceTokenizer(model_path=os.path.join(args.tokenizer, "tokenizer.model"))
 
-    models = {name: load_student(p, args.device) for name, p in students}
+    models = {name: load_student(p, args.config, args.device) for name, p in students}
     for m in models.values():
         m.freeze()
 
     acc = {name: {"off": [], "cov": {d: [] for d in deltas}} for name in models}
+    per_utt = {name: [] for name in models}
 
     for row in rows:
         utt = Path(row["audio_filepath"]).stem
@@ -116,6 +122,31 @@ def main():
             acc[name]["off"].append(sp - t_spike)
             for d in deltas:
                 acc[name]["cov"][d].append(occ[d][sp, np.arange(len(ids))])
+            off = sp - t_spike
+            aoff = np.abs(off)
+            cov6 = occ[6.0][sp, np.arange(len(ids))] if 6.0 in occ else np.zeros(len(ids))
+            hit6 = cov6 > args.eps
+            mismatch = aoff > 0
+            covered_mismatch = mismatch & hit6
+            uncovered_mismatch = mismatch & ~hit6
+            per_utt[name].append({
+                "utterance_id": utt,
+                "audio_filepath": row["audio_filepath"],
+                "n_tokens": int(len(ids)),
+                "exact_tokens": int((~mismatch).sum()),
+                "mismatch_tokens": int(mismatch.sum()),
+                "covered_mismatch_tokens": int(covered_mismatch.sum()),
+                "uncovered_mismatch_tokens": int(uncovered_mismatch.sum()),
+                "exact_fraction": float((~mismatch).mean()),
+                "recoverable_local_fraction": float(covered_mismatch.mean()),
+                "uncovered_fraction": float(uncovered_mismatch.mean()),
+                "covered_fraction_among_mismatch": float(
+                    covered_mismatch.sum() / max(int(mismatch.sum()), 1)
+                ),
+                "mean_abs_offset": float(aoff.mean()),
+                "p90_abs_offset": float(np.percentile(aoff, 90)),
+                "max_abs_offset": int(aoff.max()),
+            })
 
 
     # ----------------------------------------------------------------- tables --
@@ -165,8 +196,13 @@ def main():
                         **{f"{n}_off": np.concatenate(acc[n]["off"]) for n in models},
                         **{f"{n}_cov{d:g}": np.concatenate(acc[n]["cov"][d])
                            for n in models for d in deltas})
+    for name, records in per_utt.items():
+        safe_name = name.lower().replace(" ", "_").replace("/", "_")
+        with open(out / f"per_utterance_{safe_name}.jsonl", "w") as f:
+            for record in records:
+                f.write(json.dumps(record) + "\n")
 
-    print(f"\nsaved: {out}/summary.json, offsets.npz")
+    print(f"\nsaved: {out}/summary.json, offsets.npz, per-utterance JSONL")
 
 
 if __name__ == "__main__":

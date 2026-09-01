@@ -1,0 +1,22 @@
+defaults:
+  - student_base_chime3
+  - _self_
+
+# experiments/train.sh always overrides these shared optional-method fields,
+# even for none/span_kd. The TED3 base predates the newer fields, so they must
+# be declared for Hydra struct-mode compatibility.
+model:
+  span_shoulder_weight: 0.0
+  frame_dkd_alpha: 1.0
+  frame_dkd_beta: 8.0
+  frame_dkd_temperature: 4.0
+  frame_dkd_warmup_epochs: 20
+  fpkd_temperature: 1.0
+  fpkd_bkl_weight: 1.0
+  fpkd_nbf_weight: 1.0
+  carl_teacher_dim: 176
+  carl_classifier_path: ""
+  carl_temperature: 1.0
+  carl_alpha: 1.0
+  carl_gamma: 1.0
+  carl_lambda: 1.0

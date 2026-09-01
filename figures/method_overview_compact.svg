@@ -1,0 +1,195 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="500" viewBox="0 0 1800 500" role="img" aria-labelledby="title desc">
+  <title id="title">Compact overview of alignment-tolerant decoupled knowledge distillation for CTC</title>
+  <desc id="desc">Blank-suppressed forward-backward finds token occurrence support, raw teacher and student posteriors are pooled over that support, then BTKD and NTKD distill complementary information.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#465362"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2F75B5"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#D97706"/>
+    </marker>
+    <style>
+      .sans{font-family:Arial,Helvetica,sans-serif}.serif{font-family:Georgia,'Times New Roman',serif}
+      .head{font-size:25px;font-weight:700;fill:#17212B}.sub{font-size:17px;fill:#40505F}
+      .label{font-size:19px;font-weight:700;fill:#22303C}.small{font-size:15px;fill:#4B5D6B}
+      .math{font-family:Georgia,'Times New Roman',serif;font-size:18px;font-style:italic;fill:#263442}
+      .tiny{font-size:13px;fill:#687985}.panel{fill:#FFF;stroke:#C7D0D9;stroke-width:2}
+      .divider{stroke:#BFC8D2;stroke-width:2;stroke-dasharray:7 8}.flow{fill:none;stroke:#465362;stroke-width:3;marker-end:url(#arrow)}
+    </style>
+  </defs>
+
+  <rect width="1800" height="500" fill="#FFFFFF"/>
+  <line class="divider" x1="520" y1="34" x2="520" y2="466"/>
+  <line class="divider" x1="1134" y1="34" x2="1134" y2="466"/>
+
+  <!-- (a) WHERE -->
+  <text class="sans head" x="28" y="38">(a) Find WHERE</text>
+  <text class="sans sub" x="28" y="65">Blank-suppressed occurrence support</text>
+
+  <text class="sans label" x="31" y="102">Teacher posterior</text>
+  <text class="math" x="202" y="102">p<tspan baseline-shift="super" font-size="12">T</tspan><tspan baseline-shift="sub" font-size="12">t</tspan>(·)</text>
+
+  <!-- compact posterior grid -->
+  <g transform="translate(31,120)">
+    <rect width="272" height="104" rx="7" fill="#F8FAFC" stroke="#AFBBC6" stroke-width="1.5"/>
+    <text class="sans tiny" x="-8" y="20" text-anchor="end" fill="#2F75B5">y<tspan baseline-shift="sub" font-size="10">u</tspan></text>
+    <text class="sans tiny" x="-8" y="50" text-anchor="end" fill="#D97706">NT</text>
+    <text class="sans tiny" x="-8" y="80" text-anchor="end">∅</text>
+    <g stroke="#FFFFFF" stroke-width="2">
+      <rect x="1" y="1" width="38" height="30" fill="#E8F0F8"/><rect x="39" y="1" width="38" height="30" fill="#DCEAF6"/>
+      <rect x="77" y="1" width="38" height="30" fill="#BDD7EC"/><rect x="115" y="1" width="38" height="30" fill="#347FB9"/>
+      <rect x="153" y="1" width="38" height="30" fill="#C7DCEF"/><rect x="191" y="1" width="38" height="30" fill="#E4EEF7"/><rect x="229" y="1" width="42" height="30" fill="#EDF3F8"/>
+      <rect x="1" y="31" width="38" height="30" fill="#F6E8CF"/><rect x="39" y="31" width="38" height="30" fill="#F2DFBE"/>
+      <rect x="77" y="31" width="38" height="30" fill="#EACB96"/><rect x="115" y="31" width="38" height="30" fill="#E7C484"/>
+      <rect x="153" y="31" width="38" height="30" fill="#F0DBB4"/><rect x="191" y="31" width="38" height="30" fill="#F4E5CB"/><rect x="229" y="31" width="42" height="30" fill="#F7EDD9"/>
+      <rect x="1" y="61" width="38" height="42" fill="#647484"/><rect x="39" y="61" width="38" height="42" fill="#667686"/>
+      <rect x="77" y="61" width="38" height="42" fill="#718191"/><rect x="115" y="61" width="38" height="42" fill="#D8E0E6"/>
+      <rect x="153" y="61" width="38" height="42" fill="#738391"/><rect x="191" y="61" width="38" height="42" fill="#687887"/><rect x="229" y="61" width="42" height="42" fill="#647484"/>
+    </g>
+    <text class="sans tiny" x="134" y="123" text-anchor="middle">frames t →</text>
+  </g>
+
+  <!-- blank suppression -->
+  <path d="M314 170 H346" fill="none" stroke="#2F75B5" stroke-width="3" marker-end="url(#arrowBlue)"/>
+  <rect x="352" y="125" width="145" height="94" rx="11" fill="#EFF7FD" stroke="#2F75B5" stroke-width="2.5"/>
+  <text class="sans label" x="424" y="153" text-anchor="middle">Blank</text>
+  <text class="sans label" x="424" y="176" text-anchor="middle">suppression</text>
+  <text class="math" x="424" y="202" text-anchor="middle" font-size="16">log p<tspan baseline-shift="super" font-size="11">T</tspan><tspan baseline-shift="sub" font-size="11">t</tspan>(∅) − δ</text>
+
+  <path d="M424 224 V254" fill="none" stroke="#2F75B5" stroke-width="3" marker-end="url(#arrowBlue)"/>
+  <rect x="251" y="260" width="246" height="76" rx="10" fill="#F7FAFC" stroke="#607589" stroke-width="2"/>
+  <text class="sans label" x="374" y="288" text-anchor="middle">CTC forward–backward</text>
+  <text class="math" x="374" y="316" text-anchor="middle">γ<tspan baseline-shift="sub" font-size="12">t,u</tspan>(p̃<tspan baseline-shift="super" font-size="12">T</tspan>, Y)</text>
+  <path d="M164 242 V297 H240" fill="none" stroke="#465362" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text class="sans small" x="39" y="278">transcript Y</text>
+  <text class="sans tiny" x="39" y="300">order + repeats</text>
+
+  <!-- occupancy support -->
+  <path d="M374 338 V362" fill="none" stroke="#465362" stroke-width="3" marker-end="url(#arrow)"/>
+  <text class="sans label" x="31" y="396">Occurrence support</text>
+  <text class="math" x="217" y="396">a<tspan baseline-shift="super" font-size="12">T</tspan><tspan baseline-shift="sub" font-size="12">u,t</tspan> ∝ γ<tspan baseline-shift="sub" font-size="12">t,u</tspan></text>
+  <g transform="translate(31,411)">
+    <rect width="466" height="35" rx="7" fill="#F5F8FA" stroke="#8494A3" stroke-width="1.8"/>
+    <rect x="2" y="2" width="58" height="31" rx="5" fill="#E8F0F7"/>
+    <rect x="60" y="2" width="58" height="31" fill="#D7E8F4"/>
+    <rect x="118" y="2" width="58" height="31" fill="#AACDE4"/>
+    <rect x="176" y="2" width="58" height="31" fill="#4B91C3"/>
+    <rect x="234" y="2" width="58" height="31" fill="#8CBCD9"/>
+    <rect x="292" y="2" width="58" height="31" fill="#D1E4F1"/>
+    <rect x="350" y="2" width="58" height="31" fill="#E5EFF6"/>
+    <rect x="408" y="2" width="56" height="31" rx="5" fill="#F0F5F8"/>
+  </g>
+  <text class="sans tiny" x="264" y="472" text-anchor="middle" fill="#2F75B5">alignment-tolerant temporal coordinate</text>
+
+  <!-- (b) WHAT -->
+  <text class="sans head" x="548" y="38">(b) Pool WHAT</text>
+  <text class="sans sub" x="548" y="65">Raw posterior mixture on shared support</text>
+  <rect class="panel" x="548" y="89" width="558" height="357" rx="13"/>
+
+  <text class="sans label" x="571" y="126">Teacher</text>
+  <text class="math" x="571" y="151">p<tspan baseline-shift="super" font-size="12">T</tspan><tspan baseline-shift="sub" font-size="12">t</tspan>(·)</text>
+  <text class="sans label" x="571" y="273">Student</text>
+  <text class="math" x="571" y="298">p<tspan baseline-shift="super" font-size="12">S</tspan><tspan baseline-shift="sub" font-size="12">t</tspan>(·)</text>
+
+  <!-- teacher frames -->
+  <g transform="translate(652,105)" stroke="#667786" stroke-width="1.5">
+    <g><rect x="0" y="0" width="54" height="80" fill="#AEB8C1"/><rect x="0" y="74" width="54" height="6" fill="#2F75B5" stroke="none"/></g>
+    <g><rect x="65" y="0" width="54" height="80" fill="#AEB8C1"/><rect x="65" y="70" width="54" height="10" fill="#2F75B5" stroke="none"/></g>
+    <g><rect x="130" y="0" width="54" height="80" fill="#7FAACB"/><rect x="130" y="19" width="54" height="61" fill="#2F75B5" stroke="none"/></g>
+    <g><rect x="195" y="0" width="54" height="80" fill="#AEB8C1"/><rect x="195" y="71" width="54" height="9" fill="#2F75B5" stroke="none"/></g>
+    <g><rect x="260" y="0" width="54" height="80" fill="#AEB8C1"/><rect x="260" y="76" width="54" height="4" fill="#2F75B5" stroke="none"/></g>
+    <g><rect x="325" y="0" width="54" height="80" fill="#AEB8C1"/><rect x="325" y="77" width="54" height="3" fill="#2F75B5" stroke="none"/></g>
+    <g stroke="#9AB0C1"><rect x="0" y="90" width="54" height="17" fill="#EAF2F8"/><rect x="65" y="90" width="54" height="17" fill="#D4E6F2"/><rect x="130" y="90" width="54" height="17" fill="#5598C6"/><rect x="195" y="90" width="54" height="17" fill="#C3DDEA"/><rect x="260" y="90" width="54" height="17" fill="#E2EDF5"/><rect x="325" y="90" width="54" height="17" fill="#EDF3F7"/></g>
+  </g>
+  <!-- student frames, shifted spike -->
+  <g transform="translate(652,252)" stroke="#667786" stroke-width="1.5">
+    <g><rect x="0" y="0" width="54" height="80" fill="#AEB8C1"/><rect x="0" y="76" width="54" height="4" fill="#2F75B5" stroke="none"/></g>
+    <g><rect x="65" y="0" width="54" height="80" fill="#AEB8C1"/><rect x="65" y="75" width="54" height="5" fill="#2F75B5" stroke="none"/></g>
+    <g><rect x="130" y="0" width="54" height="80" fill="#AEB8C1"/><rect x="130" y="70" width="54" height="10" fill="#2F75B5" stroke="none"/></g>
+    <g><rect x="195" y="0" width="54" height="80" fill="#78A8CC"/><rect x="195" y="18" width="54" height="62" fill="#2F75B5" stroke="none"/></g>
+    <g><rect x="260" y="0" width="54" height="80" fill="#AEB8C1"/><rect x="260" y="72" width="54" height="8" fill="#2F75B5" stroke="none"/></g>
+    <g><rect x="325" y="0" width="54" height="80" fill="#AEB8C1"/><rect x="325" y="77" width="54" height="3" fill="#2F75B5" stroke="none"/></g>
+    <g stroke="#9AB0C1"><rect x="0" y="90" width="54" height="17" fill="#EAF2F8"/><rect x="65" y="90" width="54" height="17" fill="#D7E8F3"/><rect x="130" y="90" width="54" height="17" fill="#7FB3D2"/><rect x="195" y="90" width="54" height="17" fill="#5598C6"/><rect x="260" y="90" width="54" height="17" fill="#D4E6F2"/><rect x="325" y="90" width="54" height="17" fill="#EDF3F7"/></g>
+  </g>
+  <text class="sans tiny" x="841" y="231" text-anchor="middle">a<tspan baseline-shift="super" font-size="10">T</tspan><tspan baseline-shift="sub" font-size="10">u,t</tspan></text>
+  <text class="sans tiny" x="841" y="378" text-anchor="middle">a<tspan baseline-shift="super" font-size="10">S</tspan><tspan baseline-shift="sub" font-size="10">u,t</tspan> = resample(a<tspan baseline-shift="super" font-size="10">T</tspan><tspan baseline-shift="sub" font-size="10">u,t</tspan>)</text>
+
+  <!-- mixtures -->
+  <path d="M1040 158 H1064" class="flow"/>
+  <path d="M1040 305 H1064" class="flow"/>
+  <text class="math" x="1088" y="147" text-anchor="middle">q<tspan baseline-shift="super" font-size="12">T</tspan><tspan baseline-shift="sub" font-size="12">u</tspan></text>
+  <text class="math" x="1088" y="294" text-anchor="middle">q<tspan baseline-shift="super" font-size="12">S</tspan><tspan baseline-shift="sub" font-size="12">u</tspan></text>
+  <text class="sans tiny" x="1088" y="170" text-anchor="middle">Σ<tspan baseline-shift="sub" font-size="10">t</tspan> a·p</text>
+  <text class="sans tiny" x="1088" y="317" text-anchor="middle">Σ<tspan baseline-shift="sub" font-size="10">t</tspan> a·p</text>
+  <text class="sans small" x="827" y="417" text-anchor="middle" font-weight="700">probability-space mixture tolerates shifted spikes</text>
+
+  <!-- WHERE and raw-posterior bypass connectors -->
+  <path d="M498 429 H532 V205 H638" fill="none" stroke="#2F75B5" stroke-width="3" marker-end="url(#arrowBlue)"/>
+  <text class="sans tiny" x="538" y="226" fill="#2F75B5">WHERE</text>
+  <path d="M303 220 V237 H535 V82 H995" fill="none" stroke="#D97706" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#arrowOrange)"/>
+  <text class="sans tiny" x="725" y="80" fill="#B55D05">WHAT: use raw p<tspan baseline-shift="super" font-size="10">T</tspan>, never p̃<tspan baseline-shift="super" font-size="10">T</tspan></text>
+
+  <!-- (c) decoupled KD -->
+  <text class="sans head" x="1162" y="38">(c) Distill complementary knowledge</text>
+  <text class="sans sub" x="1162" y="65">Occurrence-level decoupled KD</text>
+
+  <!-- BTKD -->
+  <rect x="1162" y="89" width="418" height="165" rx="14" fill="#F4F0FB" stroke="#7A5CBD" stroke-width="2.5"/>
+  <text class="sans label" x="1186" y="121" fill="#6346A6">BTKD</text>
+  <text class="sans small" x="1261" y="121">three-way mass</text>
+  <g transform="translate(1187,141)">
+    <rect width="368" height="45" rx="7" fill="#FFFFFF" stroke="#6C7A86" stroke-width="1.8"/>
+    <path d="M7 2 H74 V43 H7 Q2 43 2 38 V7 Q2 2 7 2" fill="#9AA8B4"/>
+    <rect x="74" y="2" width="220" height="41" fill="#4E8FC5"/>
+    <path d="M294 2 H361 Q366 2 366 7 V38 Q366 43 361 43 H294 Z" fill="#E69F00"/>
+    <text class="sans tiny" x="37" y="29" text-anchor="middle" fill="#FFF" font-weight="700">blank</text>
+    <text class="sans tiny" x="184" y="29" text-anchor="middle" fill="#FFF" font-weight="700">target y<tspan baseline-shift="sub" font-size="10">u</tspan></text>
+    <text class="sans tiny" x="330" y="29" text-anchor="middle" fill="#FFF" font-weight="700">NT</text>
+  </g>
+  <text class="math" x="1371" y="222" text-anchor="middle">L<tspan baseline-shift="sub" font-size="12">BTKD</tspan> = KL(m<tspan baseline-shift="super" font-size="12">T</tspan><tspan baseline-shift="sub" font-size="12">u</tspan> ∥ m<tspan baseline-shift="super" font-size="12">S</tspan><tspan baseline-shift="sub" font-size="12">u</tspan>)</text>
+
+  <!-- NTKD -->
+  <rect x="1162" y="276" width="418" height="170" rx="14" fill="#EDF8F3" stroke="#258563" stroke-width="2.5"/>
+  <text class="sans label" x="1186" y="309" fill="#197050">NTKD</text>
+  <text class="sans small" x="1261" y="309">conditional alternatives</text>
+  <text class="math" x="1539" y="309" text-anchor="end" font-size="15">q(k)/q(N)</text>
+  <g transform="translate(1187,328)">
+    <rect width="368" height="45" rx="7" fill="#FFFFFF" stroke="#6C7A86" stroke-width="1.8"/>
+    <path d="M7 2 H102 V43 H7 Q2 43 2 38 V7 Q2 2 7 2" fill="#2F9B72"/>
+    <rect x="102" y="2" width="83" height="41" fill="#64B391"/>
+    <rect x="185" y="2" width="67" height="41" fill="#92CBAF"/>
+    <rect x="252" y="2" width="48" height="41" fill="#BBDDCB"/>
+    <path d="M300 2 H361 Q366 2 366 7 V38 Q366 43 361 43 H300 Z" fill="#CED7DC"/>
+    <text class="sans tiny" x="52" y="29" text-anchor="middle" fill="#FFF" font-weight="700">k₁</text>
+    <text class="sans tiny" x="143" y="29" text-anchor="middle" fill="#FFF" font-weight="700">k₂</text>
+    <text class="sans tiny" x="218" y="29" text-anchor="middle">…</text>
+    <text class="sans tiny" x="276" y="29" text-anchor="middle">k₃₂</text>
+    <text class="sans tiny" x="332" y="29" text-anchor="middle">tail</text>
+  </g>
+  <text class="math" x="1371" y="413" text-anchor="middle">L<tspan baseline-shift="sub" font-size="12">NTKD</tspan> = KL(r̂<tspan baseline-shift="super" font-size="12">T</tspan><tspan baseline-shift="sub" font-size="12">u</tspan> ∥ r̂<tspan baseline-shift="super" font-size="12">S</tspan><tspan baseline-shift="sub" font-size="12">u</tspan>)</text>
+
+  <!-- q to branches and final objective -->
+  <path d="M1107 232 H1140 V172 H1154" class="flow"/>
+  <path d="M1140 232 V360 H1154" fill="none" stroke="#465362" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M1586 172 H1614 V231 H1637" class="flow"/>
+  <path d="M1586 360 H1614 V299 H1637" class="flow"/>
+
+  <rect x="1645" y="177" width="132" height="176" rx="13" fill="#F8FAFC" stroke="#5F6F7E" stroke-width="2.5"/>
+  <text class="sans label" x="1711" y="210" text-anchor="middle">AT-DKD</text>
+  <text class="math" x="1711" y="249" text-anchor="middle" font-size="16">α L<tspan baseline-shift="sub" font-size="11">BTKD</tspan></text>
+  <text class="math" x="1711" y="280" text-anchor="middle" font-size="16">+ β L<tspan baseline-shift="sub" font-size="11">NTKD</tspan></text>
+  <line x1="1667" y1="297" x2="1755" y2="297" stroke="#AAB4BD" stroke-width="1.5"/>
+  <text class="math" x="1711" y="328" text-anchor="middle" font-size="16">+ L<tspan baseline-shift="sub" font-size="11">CTC</tspan></text>
+  <path d="M1711 355 V396" class="flow"/>
+  <rect x="1645" y="404" width="132" height="42" rx="9" fill="#FFFFFF" stroke="#5F6F7E" stroke-width="2"/>
+  <text class="sans label" x="1711" y="431" text-anchor="middle">Student</text>
+
+  <!-- bottom takeaways -->
+  <text class="sans tiny" x="1371" y="474" text-anchor="middle">
+    <tspan fill="#7A5CBD" font-weight="700">BTKD:</tspan><tspan> emission calibration   </tspan>
+    <tspan fill="#258563" font-weight="700">NTKD:</tspan><tspan> dark-knowledge relations</tspan>
+  </text>
+</svg>

@@ -4,6 +4,7 @@
 Modes:
   transition : add teacher_target from teacher greedy CTC path collapse
   frame_topk : add teacher_frame_kd_path with per-frame top-k posterior .pt files
+  frame_dense: add teacher_frame_kd_path with the full per-frame posterior
 """
 import argparse
 import json
@@ -75,7 +76,8 @@ def viterbi_forced_align(log_probs_np, tokens, blank_id):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["transition", "frame_topk", "token_avg"], required=True)
+    ap.add_argument("--mode", choices=["transition", "frame_topk", "frame_dense", "token_avg"],
+                    required=True)
     ap.add_argument("--manifest_in", required=True)
     ap.add_argument("--manifest_out", required=True)
     ap.add_argument("--teacher", default="stt_en_conformer_ctc_small")
@@ -85,6 +87,10 @@ def main():
     ap.add_argument("--top_k", type=int, default=8)
     ap.add_argument("--temperature", type=float, default=2.0)
     ap.add_argument("--out_dir", default="")
+    ap.add_argument("--resume", action="store_true",
+                    help="reuse valid per-utterance target files and continue an interrupted build")
+    ap.add_argument("--flush_every", type=int, default=100,
+                    help="write a partial manifest after this many newly generated targets")
     ap.add_argument("--confidence_threshold", type=float, default=0.0,
                     help="token_avg: skip segment if avg_p[token] < threshold (0=disabled)")
     ap.add_argument("--min_seg_len", type=int, default=1,
@@ -112,10 +118,10 @@ def main():
         rows = rows[: args.limit]
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(
-        "data/frame_kd" if args.mode == "frame_topk" else "data/token_avg_kd"
+        "data/frame_kd" if args.mode in ("frame_topk", "frame_dense") else "data/token_avg_kd"
     )
     manifest_dir = Path(args.manifest_out).parent
-    if args.mode in ("frame_topk", "token_avg"):
+    if args.mode in ("frame_topk", "frame_dense", "token_avg"):
         (manifest_dir / out_dir.name).mkdir(parents=True, exist_ok=True)
 
     def load_audio(path):
@@ -134,10 +140,42 @@ def main():
     n_segs_total = 0
     n_filtered_len = 0
     n_filtered_conf = 0
+    reused = 0
+    generated = 0
+
+    # Expensive dense targets are restartable. Build only missing/corrupt files;
+    # rows with a valid cache are still written to the output manifest.
+    process_indices = list(range(len(rows)))
+    if args.mode in ("frame_topk", "frame_dense", "token_avg") and args.resume:
+        process_indices = []
+        for idx, row in enumerate(rows):
+            rel = Path(out_dir.name) / f"{idx:06d}.pt"
+            out_path = manifest_dir / rel
+            if out_path.exists():
+                try:
+                    cached = torch.load(out_path, map_location="cpu", weights_only=False)
+                    if args.mode == "frame_dense":
+                        valid = "dense_probs" in cached
+                        key = "teacher_frame_kd_path"
+                    elif args.mode == "frame_topk":
+                        valid = "ids" in cached and "probs" in cached
+                        key = "teacher_frame_kd_path"
+                    else:
+                        valid = "avg_ids" in cached and "avg_probs" in cached
+                        key = "teacher_token_avg_path"
+                    if valid:
+                        row[key] = str(rel)
+                        reused += 1
+                        continue
+                except Exception as exc:
+                    print(f"[warn] failed to reuse {out_path}: {exc}", flush=True)
+            process_indices.append(idx)
+
 
     with torch.no_grad():
-        for start in range(0, len(rows), args.batch_size):
-            batch = rows[start : start + args.batch_size]
+        for start in range(0, len(process_indices), args.batch_size):
+            batch_indices = process_indices[start : start + args.batch_size]
+            batch = [rows[idx] for idx in batch_indices]
             sigs = [load_audio(row["audio_filepath"]) for row in batch]
             lens = torch.tensor([x.numel() for x in sigs], dtype=torch.long, device=args.device)
             padded = pad_sequence(sigs, batch_first=True).to(args.device)
@@ -146,7 +184,7 @@ def main():
             enc_len_cpu = enc_len.detach().cpu()
 
             for i, row in enumerate(batch):
-                global_idx = start + i
+                global_idx = batch_indices[i]
                 frames = int(enc_len_cpu[i].item())
                 t_lengths.append(frames)
 
@@ -174,6 +212,23 @@ def main():
                         manifest_dir / rel,
                     )
                     row["teacher_frame_kd_path"] = str(rel)
+                elif args.mode == "frame_dense":
+                    lp = log_probs[i, :frames].float()
+                    if args.temperature != 1.0:
+                        lp = torch.log_softmax(lp / args.temperature, dim=-1)
+                    rel = Path(out_dir.name) / f"{global_idx:06d}.pt"
+                    torch.save(
+                        {
+                            "dense_probs": lp.exp().detach().cpu().to(torch.bfloat16),
+                            "frames": frames,
+                            "vocab_size": int(lp.shape[-1]),
+                            "temperature": float(args.temperature),
+                            "mode": "frame_dense",
+                        },
+                        manifest_dir / rel,
+                    )
+                    row["teacher_frame_kd_path"] = str(rel)
+
                 else:  # token_avg
                     lp = log_probs[i, :frames].float()
                     prob = lp.exp().cpu().numpy()  # (T, K)
@@ -275,14 +330,24 @@ def main():
                     )
                     row["teacher_token_avg_path"] = str(rel)
                     target_lengths.append(len(seg_starts))
+                generated += 1
+                if generated % args.flush_every == 0:
+                    write_manifest(args.manifest_out, rows)
 
-            print(f"[prog] {min(start + args.batch_size, len(rows))}/{len(rows)}")
+
+            print(
+                f"[prog] generated={min(start + args.batch_size, len(process_indices))}/"
+                f"{len(process_indices)} reused={reused} total={len(rows)}",
+                flush=True,
+            )
 
     write_manifest(args.manifest_out, rows)
     print("\n========== summary ==========")
     print(f"mode             : {args.mode}")
     print(f"utterances       : {len(rows)}")
-    print(f"teacher T min/max: {min(t_lengths)}/{max(t_lengths)}")
+    print(f"generated/reused : {generated}/{reused}")
+    if t_lengths:
+        print(f"teacher T min/max: {min(t_lengths)}/{max(t_lengths)}")
     if target_lengths:
         print(f"target M min/max : {min(target_lengths)}/{max(target_lengths)}")
     if topk_masses:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Reproduce the METHOD_REPORT §6 de-peak table for arbitrary student ckpts.
+"""Reproduce the analysis/PAPER_STORYLINE_AND_METHOD.md de-peak section de-peak table for arbitrary student ckpts.
 
 Per model, over N test-clean utterances:
   blank%          fraction of frames whose greedy argmax is blank

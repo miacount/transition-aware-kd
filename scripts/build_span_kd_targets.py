@@ -71,6 +71,13 @@ def run_teacher(model, wav_np, device):
     return log_probs[0, :frames].detach().cpu().float().numpy()
 
 
+def load_ctc_teacher(nemo_asr, source):
+    """Load either a NeMo registry model name or an exported .nemo model."""
+    if source.endswith(".nemo"):
+        return nemo_asr.models.EncDecCTCModelBPE.restore_from(source)
+    return nemo_asr.models.EncDecCTCModelBPE.from_pretrained(source)
+
+
 @torch.no_grad()
 def run_phone_model(model, wav_np, log_priors, alpha, device):
     mel = _wav_to_mel(wav_np, 16000).to(device)
@@ -185,9 +192,74 @@ def label_prior_logprobs(log_probs, log_prior, alpha):
     return lp
 
 
+def adaptive_shell_support(log_probs, bpe_ids, blank_id, deltas, eta,
+                           reliability="own_nonblank"):
+    """Build a reliability-filtered support from nested blank-penalty FB runs.
+
+    The largest-delta occupancy is the Span-KD anchor. Each positive increment
+    between consecutive occupancies is an FB shell; the delta=0 core is always
+    retained, while shells are weighted by teacher evidence for the occurrence's
+    own label. Eta convexly mixes this filtered support with the anchor, so
+    eta=0 is exactly the ordinary largest-delta target.
+    """
+    if not deltas or deltas[0] != 0.0:
+        raise ValueError("adaptive shell deltas must start at 0")
+    if any(b <= a for a, b in zip(deltas, deltas[1:])):
+        raise ValueError(f"adaptive shell deltas must be strictly increasing: {deltas}")
+    if not 0.0 <= eta <= 1.0:
+        raise ValueError(f"adaptive shell eta must be in [0,1], got {eta}")
+    if reliability not in {"own_raw", "own_nonblank", "shell_mean_nonblank"}:
+        raise ValueError(f"unknown adaptive shell reliability: {reliability}")
+
+    gammas = []
+    for delta in deltas:
+        where_lp = blank_penalty_logprobs(log_probs, blank_id, delta)
+        gammas.append(ctc_forward_backward(where_lp, bpe_ids, blank_id)["token_gamma"])
+
+    probs = np.exp(log_probs)
+    own = probs[:, bpe_ids]
+    if reliability == "own_raw":
+        frame_rel = own
+    else:
+        nonblank = np.maximum(1.0 - probs[:, blank_id:blank_id + 1], 1e-12)
+        frame_rel = np.clip(own / nonblank, 0.0, 1.0)
+
+    filtered = gammas[0].copy()
+    shell_stats = []
+    for lower, upper, g_prev, g_next in zip(deltas, deltas[1:], gammas, gammas[1:]):
+        shell = np.maximum(g_next - g_prev, 0.0)
+        if reliability == "shell_mean_nonblank":
+            # One value per token/shell avoids cutting a smooth FB shell into a
+            # jagged posterior-shaped support.
+            rel = (shell * frame_rel).sum(axis=0, keepdims=True) / np.maximum(
+                shell.sum(axis=0, keepdims=True), 1e-12)
+        else:
+            rel = frame_rel
+        filtered += shell * rel
+        shell_stats.append({
+            "lower": float(lower), "upper": float(upper),
+            "mass": float(shell.sum()), "weighted_mass": float((shell * rel).sum()),
+        })
+
+    anchor = gammas[-1]
+    support = (1.0 - eta) * anchor + eta * filtered
+    return support, shell_stats
+
+
 def teacher_semantic_topk(teacher_lp, teacher_gamma, blank_id, top_k, support=None,
-                          keep_blank=False, time_smooth=0.0, mask_neighbor_ids=None):
-    probs = np.exp(teacher_lp)
+                          keep_blank=False, time_smooth=0.0, mask_neighbor_ids=None,
+                          target_temperature=1.0):
+    if target_temperature <= 0.0:
+        raise ValueError(f"target_temperature must be > 0, got {target_temperature}")
+    if target_temperature == 1.0:
+        probs = np.exp(teacher_lp)
+    else:
+        # teacher_lp is log-softmax(z); softmax(teacher_lp / T) is exactly
+        # softmax(z / T), since the frame-wise log-normalizer cancels.
+        scaled = teacher_lp / target_temperature
+        scaled = scaled - scaled.max(axis=-1, keepdims=True)
+        probs = np.exp(scaled)
+        probs = probs / np.maximum(probs.sum(axis=-1, keepdims=True), 1e-12)
     probs = time_smooth_probs(probs, time_smooth)
     out_ids = []
     out_probs = []
@@ -218,6 +290,55 @@ def teacher_semantic_topk(teacher_lp, teacher_gamma, blank_id, top_k, support=No
     return np.stack(out_ids), np.stack(out_probs)
 
 
+def teacher_nontarget_topm(
+        teacher_lp, teacher_gamma, bpe_ids, blank_id, top_m,
+        return_mass3=False):
+    """Raw occupancy-pooled non-target distribution, compressed as top-M + tail.
+
+    Unlike ordinary top-k caching, selected probabilities are not renormalized:
+    the exact residual probability is retained as one tail bucket. GT and blank
+    are removed before the non-target normalization.
+    """
+    probs = np.exp(teacher_lp.astype(np.float64))
+    out_ids, out_probs, out_tail, out_mass3 = [], [], [], []
+    for u, y in enumerate(bpe_ids):
+        weights = teacher_gamma[:, u].astype(np.float64)
+        weights = weights / max(float(weights.sum()), 1e-30)
+        q = (weights[:, None] * probs).sum(axis=0)
+        # Coarse distribution before any class removal.  Together with the
+        # conditional non-target distribution below this forms a hierarchical
+        # factorization of the occupancy-pooled posterior. Its stored top-M +
+        # tail representation preserves selected relations and residual mass,
+        # but intentionally compresses relations among tail classes:
+        #   [blank, occurrence-GT, all non-target classes].
+        blank_mass = float(q[blank_id])
+        gt_mass = float(q[int(y)])
+        nt_mass = max(0.0, float(q.sum()) - blank_mass - gt_mass)
+        mass3 = np.asarray([blank_mass, gt_mass, nt_mass], dtype=np.float64)
+        mass3 = mass3 / max(float(mass3.sum()), 1e-30)
+        q[blank_id] = 0.0
+        q = q / max(float(q.sum()), 1e-30)
+        q[int(y)] = 0.0
+        q = q / max(float(q.sum()), 1e-30)
+        m = min(int(top_m), q.size - 2)
+        idx = np.argpartition(q, -m)[-m:]
+        idx = idx[np.argsort(q[idx])[::-1]]
+        vals = q[idx]
+        tail = max(0.0, 1.0 - float(vals.sum()))
+        # Correct tiny roundoff while preserving the selected/tail ratio.
+        total = float(vals.sum()) + tail
+        vals = vals / max(total, 1e-30)
+        tail = tail / max(total, 1e-30)
+        out_ids.append(idx.astype(np.int32))
+        out_probs.append(vals.astype(np.float32))
+        out_tail.append(np.float32(tail))
+        out_mass3.append(mass3.astype(np.float32))
+    result = (np.stack(out_ids), np.stack(out_probs), np.asarray(out_tail))
+    if return_mass3:
+        return (*result, np.stack(out_mass3))
+    return result
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest-in", required=True)
@@ -226,7 +347,15 @@ def main():
     ap.add_argument("--teacher", default="stt_en_conformer_ctc_small")
     ap.add_argument("--tokenizer", default="tokenizer_1024")
     ap.add_argument("--out-dir", default="data/span_kd")
+    ap.add_argument("--reuse-frame-posterior", action="store_true",
+                    help="reuse a T=1 dense posterior referenced by teacher_frame_kd_path")
     ap.add_argument("--top-k", type=int, default=8)
+    ap.add_argument(
+        "--dark-top-m", type=int, default=0,
+        help="teacher-only mode: additionally store raw occupancy-pooled non-target "
+             "dark knowledge as top-M classes plus an exact residual tail bucket. "
+             "0 disables it; recommended diagnostic-backed setting is 32.",
+    )
     ap.add_argument("--span-mode", choices=["proportional", "word"], default="proportional")
     ap.add_argument(
         "--teacher-target-weighting",
@@ -252,6 +381,22 @@ def main():
     ap.add_argument(
         "--teacher-blank-penalty", type=float, default=0.0,
         help="teacher-only mode: nats subtracted from blank log-prob before FB (0=peaky).",
+    )
+    ap.add_argument(
+        "--adaptive-shell-deltas", default="",
+        help="teacher-only FB mode: comma-separated nested penalties beginning at 0, "
+             "e.g. 0,2,4,6. Empty keeps ordinary single-delta Span-KD.",
+    )
+    ap.add_argument(
+        "--adaptive-shell-eta", type=float, default=0.0,
+        help="convex mixture weight for reliability-filtered multi-delta support; "
+             "0 reproduces the largest-delta anchor and 1 uses only filtered shells.",
+    )
+    ap.add_argument(
+        "--adaptive-shell-reliability",
+        choices=["own_raw", "own_nonblank", "shell_mean_nonblank"],
+        default="own_nonblank",
+        help="teacher confidence used to retain each newly recruited FB shell.",
     )
     ap.add_argument(
         "--where-mode", choices=["fb", "posterior", "segment"], default="fb",
@@ -283,6 +428,11 @@ def main():
              "without leaking mass to meaningless tokens the way temperature does.",
     )
     ap.add_argument(
+        "--teacher-target-temperature", type=float, default=1.0,
+        help="temperature applied ONLY to the teacher WHAT posterior before "
+             "occupancy pooling (1.0 = original Span-KD). WHERE/FB remains at T=1.",
+    )
+    ap.add_argument(
         "--mask-neighbor-tokens", action="store_true",
         help="teacher-only mode: zero the immediate transcript neighbours "
              "(y_{u-1}, y_{u+1}) in each token's semantic top-k target before "
@@ -306,6 +456,16 @@ def main():
     ap.add_argument("--flush-every", type=int, default=100, help="write partial manifest every N kept rows")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
+    if args.reuse_frame_posterior and not args.teacher_only:
+        ap.error("--reuse-frame-posterior requires --teacher-only")
+    if args.reuse_frame_posterior and (args.where_model or args.teacher_label_prior_alpha > 0.0):
+        ap.error("dense reuse is incompatible with --where-model or label-prior support")
+    shell_deltas = (
+        [float(x) for x in args.adaptive_shell_deltas.split(",") if x.strip()]
+        if args.adaptive_shell_deltas else []
+    )
+    if shell_deltas and (not args.teacher_only or args.where_mode != "fb"):
+        ap.error("--adaptive-shell-deltas requires --teacher-only --where-mode fb")
 
     import nemo.collections.asr as nemo_asr
     from nemo.collections.common.tokenizers.sentencepiece_tokenizer import SentencePieceTokenizer
@@ -314,7 +474,7 @@ def main():
     if args.limit:
         rows = rows[:args.limit]
 
-    teacher = nemo_asr.models.EncDecCTCModelBPE.from_pretrained(args.teacher).to(args.device).eval()
+    teacher = load_ctc_teacher(nemo_asr, args.teacher).to(args.device).eval()
     teacher.freeze()
     bpe_blank = int(teacher.decoder.num_classes_with_blank - 1)
     sample_rate = int(teacher.cfg.preprocessor.sample_rate)
@@ -356,12 +516,29 @@ def main():
     out_dir = Path(args.out_dir)
     (manifest_dir / out_dir.name).mkdir(parents=True, exist_ok=True)
 
+    def load_cached_teacher_lp(row):
+        rel_path = row.get("teacher_frame_kd_path")
+        if not rel_path:
+            raise ValueError("--reuse-frame-posterior requires teacher_frame_kd_path on every row")
+        cache_path = Path(rel_path)
+        if not cache_path.is_absolute():
+            cache_path = Path(args.manifest_in).parent / cache_path
+        cached = torch.load(cache_path, map_location="cpu", weights_only=False)
+        if "dense_probs" not in cached:
+            raise ValueError(f"not a dense posterior cache: {cache_path}")
+        if abs(float(cached.get("temperature", 1.0)) - 1.0) > 1e-6:
+            raise ValueError(f"expected T=1 dense posterior: {cache_path}")
+        probs = cached["dense_probs"].float().numpy().astype(np.float64)
+        probs /= np.maximum(probs.sum(axis=-1, keepdims=True), 1e-300)
+        return np.log(np.clip(probs, 1e-300, None))
+
     kept = 0
     reused = 0
     seg_totals = {}
     skipped = {"lexicon": 0, "mapping": 0, "empty": 0}
     gate_means = []
     coverage_p10 = []
+    shell_mass = {}
 
     for idx, row in enumerate(rows):
         bpe_ids = [int(i) for i in tokenizer.text_to_ids(row["text"]) if int(i) != bpe_blank]
@@ -371,8 +548,31 @@ def main():
 
         if args.teacher_only:
             rel = Path(out_dir.name) / f"{idx:06d}.pt"
-            wav = load_audio(row["audio_filepath"], sample_rate)
-            teacher_lp = run_teacher(teacher, wav, args.device)          # (T, V) sharp = WHAT
+            out_path = manifest_dir / rel
+            if args.resume and out_path.exists():
+                try:
+                    cached = torch.load(out_path, map_location="cpu", weights_only=False)
+                    row["teacher_span_kd_path"] = str(rel)
+                    kept += 1
+                    reused += 1
+                    gate_vals = cached.get("gates")
+                    if gate_vals is not None:
+                        gate_np = gate_vals.float().numpy()
+                        gate_means.append(float(gate_np.mean()))
+                        coverage_p10.append(float(np.quantile(gate_np, 0.1)))
+                    if kept % args.flush_every == 0:
+                        write_manifest(args.manifest_out, rows)
+                        print(f"[prog] kept={kept} reused={reused} processed={idx+1}/{len(rows)}",
+                              flush=True)
+                    continue
+                except Exception as exc:
+                    print(f"[warn] failed to reuse {out_path}: {exc}; rebuilding", flush=True)
+            if args.reuse_frame_posterior:
+                teacher_lp = load_cached_teacher_lp(row)                   # (T, V) sharp = WHAT
+                wav = None
+            else:
+                wav = load_audio(row["audio_filepath"], sample_rate)
+                teacher_lp = run_teacher(teacher, wav, args.device)          # (T, V) sharp = WHAT
             # WHERE: gamma from the fine-tuned model if given, else the (de-peaked) teacher itself.
             if where_model is not None:
                 where_lp = run_teacher(where_model, wav, args.device)
@@ -384,7 +584,17 @@ def main():
                 where_lp = label_prior_logprobs(teacher_lp, label_log_prior, args.teacher_label_prior_alpha)
             else:
                 where_lp = blank_penalty_logprobs(teacher_lp, bpe_blank, args.teacher_blank_penalty)
-            if args.where_mode == "posterior":
+            shell_stats = []
+            if shell_deltas:
+                gamma, shell_stats = adaptive_shell_support(
+                    teacher_lp, bpe_ids, bpe_blank, shell_deltas,
+                    args.adaptive_shell_eta, args.adaptive_shell_reliability)
+                for stat in shell_stats:
+                    key = f"{stat['lower']:g}->{stat['upper']:g}"
+                    acc = shell_mass.setdefault(key, {"mass": 0.0, "weighted_mass": 0.0})
+                    acc["mass"] += stat["mass"]
+                    acc["weighted_mass"] += stat["weighted_mass"]
+            elif args.where_mode == "posterior":
                 # no-FB ablation: support = de-peaked posterior prob of each token's id,
                 # per frame. No occurrence assignment, no monotonicity.
                 gamma = np.exp(where_lp[:, bpe_ids])                           # (T, N)
@@ -403,7 +613,20 @@ def main():
                 ]
             avg_ids, avg_probs = teacher_semantic_topk(
                 teacher_lp, gamma, bpe_blank, args.top_k, keep_blank=args.keep_blank,
-                time_smooth=args.teacher_time_smooth, mask_neighbor_ids=neighbor_ids)
+                time_smooth=args.teacher_time_smooth, mask_neighbor_ids=neighbor_ids,
+                target_temperature=args.teacher_target_temperature)
+            dark = {}
+            if args.dark_top_m > 0:
+                dark_ids, dark_probs, dark_tail, mass3 = teacher_nontarget_topm(
+                    teacher_lp, gamma, bpe_ids, bpe_blank, args.dark_top_m,
+                    return_mass3=True)
+                dark = {
+                    "dark_ids": torch.tensor(dark_ids, dtype=torch.int32),
+                    "dark_probs": torch.tensor(dark_probs, dtype=torch.float16),
+                    "dark_tail_prob": torch.tensor(dark_tail, dtype=torch.float16),
+                    "mass3_probs": torch.tensor(mass3, dtype=torch.float16),
+                    "dark_top_m": int(args.dark_top_m),
+                }
             gates = np.ones(len(bpe_ids), dtype=np.float32)             # teacher-only: no aligner disagreement
             torch.save(
                 {
@@ -415,11 +638,16 @@ def main():
                     "num_tokens": int(len(bpe_ids)),
                     "top_k": int(args.top_k),
                     "teacher_blank_penalty": float(args.teacher_blank_penalty),
+                    "adaptive_shell_deltas": shell_deltas,
+                    "adaptive_shell_eta": float(args.adaptive_shell_eta),
+                    "adaptive_shell_reliability": args.adaptive_shell_reliability,
                     "where_mode": args.where_mode,
                     "teacher_time_smooth": float(args.teacher_time_smooth),
+                    "teacher_target_temperature": float(args.teacher_target_temperature),
                     "teacher_label_prior_alpha": float(args.teacher_label_prior_alpha),
                     "mask_neighbor_tokens": bool(args.mask_neighbor_tokens),
                     "mode": "teacher_only",
+                    **dark,
                 },
                 manifest_dir / rel,
             )
@@ -491,6 +719,7 @@ def main():
             args.top_k,
             support=target_support,
             time_smooth=args.teacher_time_smooth,
+            target_temperature=args.teacher_target_temperature,
         )
 
         torch.save(
@@ -504,6 +733,7 @@ def main():
                 "top_k": int(args.top_k),
                 "span_mode": args.span_mode,
                 "teacher_target_weighting": args.teacher_target_weighting,
+                "teacher_target_temperature": float(args.teacher_target_temperature),
                 "phoneme_ckpt": args.phoneme_ckpt,
             },
             manifest_dir / rel,
@@ -532,6 +762,10 @@ def main():
     if gate_means:
         print(f"gate mean avg     : {np.mean(gate_means):.4f}")
         print(f"gate p10 avg      : {np.mean(coverage_p10):.4f}")
+    if shell_mass:
+        for key, value in shell_mass.items():
+            kept_frac = value["weighted_mass"] / max(value["mass"], 1e-12)
+            print(f"shell {key:>9} kept: {kept_frac:.4f}")
     print(f"written           : {args.manifest_out}")
 
 

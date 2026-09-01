@@ -11,7 +11,19 @@ outputs/
 
 # workspace artifacts
 CLEANUP_MANIFEST.txt
-analysis/
+# Raw analysis is local; track only paper-ready summaries and final decoding logs.
+analysis/*
+!analysis/PAPER_STORYLINE_AND_METHOD.md
+!analysis/VALIDATION_FIGURES.md
+!analysis/published_baseline_audit_2026-07-29.md
+!analysis/ted3_loss_ratio_calibration_2026-08-05.md
+!analysis/paper_main_metrics_beam16.csv
+!analysis/paper_main_table_beam16.md
+!analysis/beam16_paper_*.txt
+!analysis/mfa_validation/
+analysis/mfa_validation/*
+!analysis/mfa_validation/*.md
+!analysis/mfa_validation/*.json
 
 # python
 __pycache__/

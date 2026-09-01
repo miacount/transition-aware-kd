@@ -1,0 +1,49 @@
+[NeMo I 2026-08-14 08:05:26 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo I 2026-08-14 08:05:26 nemo_logging:393] 
+    Replacing placeholder number of classes (-1) with actual number of classes - 1024
+[NeMo I 2026-08-14 08:05:26 nemo_logging:393] PADDING: 0
+model=chime3_lr05_mass25_ntdk8
+checkpoint=nemo_experiments/paper-chime3-lr05-mass3-w25-ntdk8-s1/2026-08-14_07-16-32/checkpoints/paper-chime3-lr05-mass3-w25-ntdk8-s1--val_wer=0.2925-epoch=94.ckpt
+beam_width=16 beam_prune_logp=-10.0 token_min_logp=-5.0 workers=8
+
+[chime3_dev_real]
+  progress utterances=320 elapsed=1.0s
+  progress utterances=640 elapsed=1.5s
+  progress utterances=960 elapsed=1.9s
+  progress utterances=1280 elapsed=2.4s
+  progress utterances=1600 elapsed=3.0s
+utterances=1640 CTC_loss=34.8426
+greedy   WER=33.5287% INS=2.3586%(640) DEL=6.8841%(1868) SUB=24.2860%(6590) REF_WORDS=27135
+beam     WER=32.7400% INS=2.2149%(601) DEL=6.3460%(1722) SUB=24.1791%(6561) REF_WORDS=27135
+beam_minus_greedy_WER=-0.7886%p
+
+[chime3_dev_simu]
+  progress utterances=320 elapsed=0.7s
+  progress utterances=640 elapsed=1.2s
+  progress utterances=960 elapsed=1.6s
+  progress utterances=1280 elapsed=2.0s
+  progress utterances=1600 elapsed=2.4s
+utterances=1640 CTC_loss=23.3351
+greedy   WER=25.0184% INS=2.2074%(599) DEL=3.6741%(997) SUB=19.1369%(5193) REF_WORDS=27136
+beam     WER=24.1782% INS=2.0195%(548) DEL=3.4235%(929) SUB=18.7353%(5084) REF_WORDS=27136
+beam_minus_greedy_WER=-0.8402%p
+
+[chime3_eval_real]
+  progress utterances=320 elapsed=0.8s
+  progress utterances=640 elapsed=1.4s
+  progress utterances=960 elapsed=2.0s
+  progress utterances=1280 elapsed=2.5s
+utterances=1320 CTC_loss=51.6539
+greedy   WER=45.5611% INS=3.4138%(731) DEL=10.1714%(2178) SUB=31.9759%(6847) REF_WORDS=21413
+beam     WER=44.6458% INS=3.3671%(721) DEL=9.2140%(1973) SUB=32.0646%(6866) REF_WORDS=21413
+beam_minus_greedy_WER=-0.9153%p
+
+[chime3_eval_simu]
+  progress utterances=320 elapsed=0.8s
+  progress utterances=640 elapsed=1.2s
+  progress utterances=960 elapsed=1.7s
+  progress utterances=1280 elapsed=2.1s
+utterances=1320 CTC_loss=27.5587
+greedy   WER=29.0523% INS=2.8618%(613) DEL=3.6601%(784) SUB=22.5303%(4826) REF_WORDS=21420
+beam     WER=28.0392% INS=2.6331%(564) DEL=3.3894%(726) SUB=22.0168%(4716) REF_WORDS=21420
+beam_minus_greedy_WER=-1.0131%p

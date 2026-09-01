@@ -33,7 +33,7 @@ def load_model(config_path, ckpt_path, device):
         raise RuntimeError(
             f"config/checkpoint architecture mismatch: {len(core_bad)} encoder/decoder "
             f"keys failed to load (e.g. {core_bad[:3]}). Pass the config the checkpoint "
-            f"was trained with (e.g. --config configs/student_sub8.yaml for sub8 runs).")
+            "was trained with (for example, configs/student_base_ted2.yaml for TED-LIUM2).")
     return model.to(device).eval(), cfg
 
 

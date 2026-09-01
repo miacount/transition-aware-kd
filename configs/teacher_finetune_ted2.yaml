@@ -1,0 +1,72 @@
+source_model: stt_en_conformer_ctc_small
+output_nemo: nemo_experiments/teacher-ted2-adapted-s1/best-teacher-ted2-adapted-s1.nemo
+seed: 1
+
+train_ds:
+  manifest_filepath: data/tedlium2_train.json
+  sample_rate: 16000
+  batch_size: 16
+  shuffle: true
+  num_workers: 8
+  pin_memory: true
+  use_start_end_token: false
+  trim_silence: false
+  max_duration: 20.0
+  min_duration: 0.1
+
+validation_ds:
+  manifest_filepath: data/tedlium2_dev.json
+  sample_rate: 16000
+  batch_size: 32
+  shuffle: false
+  num_workers: 8
+  pin_memory: true
+  use_start_end_token: false
+
+test_ds:
+  manifest_filepath: data/tedlium2_test.json
+  sample_rate: 16000
+  batch_size: 32
+  shuffle: false
+  num_workers: 8
+  pin_memory: true
+  use_start_end_token: false
+
+optim:
+  name: adamw
+  lr: 1.0e-4
+  betas: [0.9, 0.98]
+  weight_decay: 1.0e-3
+  sched:
+    name: CosineAnnealing
+    warmup_steps: 1000
+    min_lr: 1.0e-6
+
+trainer:
+  devices: 1
+  accelerator: gpu
+  max_epochs: 10
+  precision: bf16-mixed
+  log_every_n_steps: 50
+  val_check_interval: 1.0
+  enable_checkpointing: false
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 4
+
+exp_manager:
+  exp_dir: nemo_experiments
+  name: teacher-ted2-adapted-s1
+  create_tensorboard_logger: true
+  create_wandb_logger: true
+  wandb_logger_kwargs:
+    project: transition-aware-kd-ted2-pilot
+    name: teacher-ted2-adapted-s1
+  create_checkpoint_callback: true
+  checkpoint_callback_params:
+    monitor: val_wer
+    mode: min
+    save_top_k: 3
+    save_last: true
+    filename: teacher-ted2-adapted-s1--{val_wer:.4f}-{epoch}
+  resume_if_exists: false
+  resume_ignore_no_checkpoint: true

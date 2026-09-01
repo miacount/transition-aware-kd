@@ -1,0 +1,16 @@
+[NeMo I 2026-08-10 20:05:24 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo I 2026-08-10 20:05:24 nemo_logging:393] 
+    Replacing placeholder number of classes (-1) with actual number of classes - 1024
+[NeMo I 2026-08-10 20:05:24 nemo_logging:393] PADDING: 0
+model=ted2_sctc_ft
+checkpoint=nemo_experiments/paper-ted2-sctc-l1-ctcft-s1/2026-08-10_14-16-37/checkpoints/paper-ted2-sctc-l1-ctcft-s1--val_wer=0.1564-epoch=0.ckpt
+beam_width=16 beam_prune_logp=-10.0 token_min_logp=-5.0 workers=8
+
+[ted2_test]
+  progress utterances=320 elapsed=1.1s
+  progress utterances=640 elapsed=1.5s
+  progress utterances=960 elapsed=2.3s
+utterances=1155 CTC_loss=18.9048
+greedy   WER=15.2655% INS=1.5564%(428) DEL=3.3964%(934) SUB=10.3127%(2836) REF_WORDS=27500
+beam     WER=14.5455% INS=1.4764%(406) DEL=3.0618%(842) SUB=10.0073%(2752) REF_WORDS=27500
+beam_minus_greedy_WER=-0.7200%p

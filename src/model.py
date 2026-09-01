@@ -31,17 +31,24 @@ from nemo.collections.asr.models import EncDecCTCModelBPE
 from ctc_fb import batched_ctc_token_gamma
 from data import make_dataloader
 from transition_kd_batched import transition_kd_loss_batched
+from free_emit_kd import curriculum_margin, free_emit_loss
 
 _VALID_KD_MODES = (
     "none", "trans", "logit", "token_avg", "combined",
     "guided", "delayed_logit", "self_kd", "aligned_token", "span_kd", "cr_ctc", "sctc",
-    "boundary_kd",
+    "boundary_kd", "free_emit", "frame_dkd", "fpkd_dfkd", "fpkd_frkd", "fpkd_pkd",
+    "carl_feature", "carl",
 )
-_NEEDS_FRAME_KD   = ("logit", "combined", "guided", "delayed_logit")
+_NEEDS_FRAME_KD   = (
+    "logit", "combined", "guided", "delayed_logit", "frame_dkd",
+    "fpkd_dfkd", "fpkd_frkd", "fpkd_pkd", "carl",
+)
 _NEEDS_TOKEN_AVG  = ("token_avg", "aligned_token")
 _NEEDS_SPAN_KD    = ("span_kd",)
 _NEEDS_SCTC       = ("sctc",)
 _NEEDS_BOUNDARY_KD = ("boundary_kd",)
+_NEEDS_FREE_EMIT = ("free_emit",)
+_NEEDS_CARL_FEATURE = ("carl_feature", "carl", "fpkd_frkd")
 
 
 # ---------------------------------------------------------------------------
@@ -169,11 +176,16 @@ def _ctc_viterbi_align(log_probs, tokens, input_lengths, target_lengths, blank_i
 class TransitionKDModel(EncDecCTCModelBPE):
     def __init__(self, cfg, trainer=None):
         super().__init__(cfg=cfg, trainer=trainer)
+        self.ctc_blank_init_bias = float(cfg.get("ctc_blank_init_bias", 0.0))
         self.kd_mode = cfg.get("kd_mode", "none")
         self.kd_weight = float(cfg.get("kd_weight", 0.0))
         self.token_avg_kd_weight = float(cfg.get("token_avg_kd_weight", 0.0))
         self.logit_kd_temperature = float(cfg.get("logit_kd_temperature", 2.0))
         self.logit_kd_blank_mode = cfg.get("logit_kd_blank_mode", "none")
+        self.logit_kd_reduction = str(cfg.get("logit_kd_reduction", "frame_mean"))
+        if self.logit_kd_reduction not in ("frame_mean", "utterance_sum"):
+            raise ValueError("logit_kd_reduction must be frame_mean or utterance_sum")
+
         self.logit_kd_blank_n = int(cfg.get("logit_kd_blank_n", 1))
         self.logit_kd_blank_threshold = float(cfg.get("logit_kd_blank_threshold", 0.9))
         self.logit_kd_blank_beta = float(cfg.get("logit_kd_blank_beta", 0.5))
@@ -194,6 +206,41 @@ class TransitionKDModel(EncDecCTCModelBPE):
         # student conditional over that set. beta=1 reproduces the current loss
         # EXACTLY; beta=0 = content-only (dark knowledge, no emission pressure).
         self.span_kd_emit_beta = float(cfg.get("span_kd_emit_beta", 1.0))
+        # Decoupled raw non-target dark knowledge. This is added outside the
+        # legacy kd_weight-scaled Span-KD anchor so its scale is independently
+        # controlled: L = L_CTC + kd_weight*L_span + weight*L_NTDK.
+        self.span_ntdk_weight = float(cfg.get("span_ntdk_weight", 0.0))
+        # Alignment-only branch. Mass3/NTDK stay anchored to the delta=0
+        # occurrence core; this branch sees only [gamma_delta-gamma_0]+ and
+        # asks for occurrence-GT emission there. Separate normalization keeps
+        # a wider support from diluting the semantic core.
+        self.span_shoulder_weight = float(cfg.get("span_shoulder_weight", 0.0))
+        if self.span_shoulder_weight < 0.0:
+            raise ValueError("span_shoulder_weight must be non-negative")
+        self.span_ntdk_reliability = bool(cfg.get("span_ntdk_reliability", False))
+        # Exact hierarchy: multiply conditional NTDK by absolute teacher NT mass
+        # while retaining the ordinary token/gate denominator.
+        self.span_ntdk_mass_weighted = bool(cfg.get("span_ntdk_mass_weighted", False))
+        if self.span_ntdk_reliability and self.span_ntdk_mass_weighted:
+            raise ValueError("span_ntdk_reliability and span_ntdk_mass_weighted are mutually exclusive")
+        self.span_ntdk_rel_min = float(cfg.get("span_ntdk_rel_min", 1e-4))
+        self.span_ntdk_rel_max = float(cfg.get("span_ntdk_rel_max", 5e-2))
+        self.span_ntdk_rel_gt_min = float(cfg.get("span_ntdk_rel_gt_min", 0.5))
+        self.span_ntdk_rel_power = float(cfg.get("span_ntdk_rel_power", 0.5))
+        if self.span_ntdk_rel_min <= 0 or self.span_ntdk_rel_max < self.span_ntdk_rel_min:
+            raise ValueError("invalid NTDK reliability mass bounds")
+        # Primary span supervision paired with NTDK:
+        #   legacy  : cached blank-removed/top-k Span-KD target (baseline)
+        #   hard_gt : occupancy-pooled occurrence GT CE; no teacher class target
+        #   mass3   : KL on exact pooled [blank, occurrence-GT, non-target] mass
+        #   gt_nt   : KL on [GT, non-target] conditioned on nonblank; no explicit blank target
+        # `kd_weight` scales whichever primary mode is selected.  NTDK remains
+        # independently controlled by span_ntdk_weight.
+        self.span_primary_mode = str(cfg.get("span_primary_mode", "legacy"))
+        if self.span_primary_mode not in ("legacy", "hard_gt", "mass3", "gt_nt"):
+            raise ValueError(
+                f"unknown span_primary_mode={self.span_primary_mode!r}; "
+                "expected legacy | hard_gt | mass3 | gt_nt")
         # Flatten the teacher target to uniform over its top-k SET (kills relative
         # confusability weights, keeps the candidate set + emission). Isolates
         # "dark knowledge = relative weights" without the K-count confound.
@@ -209,6 +256,10 @@ class TransitionKDModel(EncDecCTCModelBPE):
         #   3 hard m_zero | 4 hard m_delta, within-token uniform over dist=1 shoulders.
         self.boundary_kd_cell = int(cfg.get("boundary_kd_cell", 2))
         self.boundary_kd_train_min = float(cfg.get("boundary_kd_train_min", 0.0))
+        self.free_emit_sub_weight = float(cfg.get("free_emit_sub_weight", 0.25))
+        self.free_emit_spread_weight = float(cfg.get("free_emit_spread_weight", 0.05))
+        self.free_emit_margin_start = int(cfg.get("free_emit_margin_start", 0))
+        self.free_emit_anneal_epochs = int(cfg.get("free_emit_anneal_epochs", 70))
         # Which occupancy mass weights the boundary CE:
         #   residual    : [gamma^delta - gamma^0]_+  (shoulders only; cells 1-4)
         #   gamma_delta : the FULL gamma^delta, i.e. core spike AND shoulders.
@@ -248,10 +299,33 @@ class TransitionKDModel(EncDecCTCModelBPE):
                 torch.ones(self.decoder.num_classes_with_blank) / self.decoder.num_classes_with_blank,
             )
         self.blank_id = self.decoder.num_classes_with_blank - 1
+        if self.ctc_blank_init_bias != 0.0:
+            with torch.no_grad():
+                self.decoder.decoder_layers[-1].bias[self.blank_id].fill_(self.ctc_blank_init_bias)
         # Paper-style lambda: L = (1-λ)*L_CTC + λ*L_KD  (Hilmes et al. 2025)
         # λ=1.0 → pure KD (no CTC loss).  None → legacy formula L_CTC + kd_weight*L_KD.
         _lam = cfg.get("kd_lambda", None)
         self.kd_lambda = float(_lam) if _lam is not None else None
+
+        # Paper baselines added for the TED2 reproduction suite.
+        # Frame-DKD uses the official CVPR'22 DKD defaults. Its target is the
+        # teacher top-1 token because CTC has no observed frame label.
+        self.frame_dkd_alpha = float(cfg.get("frame_dkd_alpha", 1.0))
+        self.frame_dkd_beta = float(cfg.get("frame_dkd_beta", 8.0))
+        self.frame_dkd_temperature = float(cfg.get("frame_dkd_temperature", 4.0))
+        self.frame_dkd_warmup_epochs = int(cfg.get("frame_dkd_warmup_epochs", 20))
+        # FPKD: DFKD (binary blank), FRKD (balanced feature), PKD (CTC+FKL).
+        self.fpkd_temperature = float(cfg.get("fpkd_temperature", 1.0))
+        self.fpkd_bkl_weight = float(cfg.get("fpkd_bkl_weight", 1.0))
+        self.fpkd_nbf_weight = float(cfg.get("fpkd_nbf_weight", 1.0))
+        # CARL-CTC adaptation. The source paper's hybrid attention CE is not
+        # available in this CTC-only architecture; every CTC-side CARL term is.
+        self.carl_temperature = float(cfg.get("carl_temperature", 1.0))
+        self.carl_alpha = float(cfg.get("carl_alpha", 1.0))
+        self.carl_gamma = float(cfg.get("carl_gamma", 1.0))
+        self.carl_lambda = float(cfg.get("carl_lambda", 1.0))
+        self.carl_teacher_dim = int(cfg.get("carl_teacher_dim", 176))
+        self.carl_classifier_path = str(cfg.get("carl_classifier_path", ""))
 
         if self.kd_mode not in _VALID_KD_MODES:
             raise ValueError(f"unsupported kd_mode: {self.kd_mode}")
@@ -261,8 +335,12 @@ class TransitionKDModel(EncDecCTCModelBPE):
         if self.kd_mode == "combined":
             if self.kd_weight == 0.0 and self.token_avg_kd_weight == 0.0:
                 raise ValueError("combined mode: both kd_weight and token_avg_kd_weight are 0.0")
-        elif self.kd_mode not in ("none", "self_kd", "cr_ctc"):
-            if self.kd_lambda is None and self.kd_weight == 0.0:
+        elif self.kd_mode not in (
+            "none", "self_kd", "cr_ctc", "frame_dkd", "fpkd_dfkd", "fpkd_frkd",
+            "fpkd_pkd", "carl_feature", "carl",
+        ):
+            active_aux = self.kd_mode == "span_kd" and self.span_ntdk_weight > 0.0
+            if self.kd_lambda is None and self.kd_weight == 0.0 and not active_aux:
                 raise ValueError(
                     f"kd_mode='{self.kd_mode}' but kd_weight=0.0 and kd_lambda not set — KD loss will be zero."
                 )
@@ -281,29 +359,65 @@ class TransitionKDModel(EncDecCTCModelBPE):
             )
 
         # CR-CTC (Yao et al. 2025): dual augmented views + symmetric KL consistency.
-        # Paper default: alpha=0.2, total time-masking "volume" x2.5 vs. baseline SpecAugment.
-        # Masked area scales as time_masks * time_width (roughly, for non-saturating regions),
-        # so each factor is scaled by sqrt(volume_factor) — scaling both by the full factor
-        # would compound to factor^2 area and destroy most of the spectrogram.
+        # Paper default: alpha=0.2; multiply both the number of time masks and
+        # their maximum width/fraction by 2.5. Legacy volume scaling remains
+        # available only for old checkpoints/runs.
         if self.kd_mode == "cr_ctc":
             self.cr_ctc_weight = float(cfg.get("cr_ctc_weight", 0.2))
             # icefall default: linearly ramp cr_loss weight over 2000 batches
             self.cr_ctc_warm_step = int(cfg.get("cr_ctc_warm_step", 2000))
             volume_factor = float(cfg.get("cr_ctc_time_mask_factor", 2.5))
-            dim_factor = volume_factor ** 0.5
+            masks_scale_cfg = cfg.get("cr_ctc_time_masks_scale", None)
+            width_scale_cfg = cfg.get("cr_ctc_time_width_scale", None)
+            if masks_scale_cfg is None and width_scale_cfg is None:
+                dim_factor = volume_factor ** 0.5
+                masks_scale = dim_factor
+                width_scale = dim_factor
+            elif masks_scale_cfg is None or width_scale_cfg is None:
+                raise ValueError("set both cr_ctc_time_masks_scale and cr_ctc_time_width_scale")
+            else:
+                masks_scale = float(masks_scale_cfg)
+                width_scale = float(width_scale_cfg)
             if getattr(self._cfg, "spec_augment", None) is None:
                 raise ValueError("kd_mode='cr_ctc' requires model.spec_augment to be configured")
             cr_spec_cfg = copy.deepcopy(self._cfg.spec_augment)
-            cr_spec_cfg["time_masks"] = int(round(int(cr_spec_cfg.get("time_masks", 10)) * dim_factor))
+            cr_spec_cfg["time_masks"] = int(round(int(cr_spec_cfg.get("time_masks", 10)) * masks_scale))
             base_time_width = cr_spec_cfg.get("time_width", 0.05)
-            new_time_width = float(base_time_width) * dim_factor
+            new_time_width = float(base_time_width) * width_scale
             if isinstance(base_time_width, float):
                 # SpecAugment requires float time_width in [0, 1] (fraction of sequence length)
                 new_time_width = min(new_time_width, 1.0)
             cr_spec_cfg["time_width"] = new_time_width
             self.spec_augmentation_cr = EncDecCTCModelBPE.from_config_dict(cr_spec_cfg)
 
+        self._student_encoder_features = None
+        if self.kd_mode in _NEEDS_CARL_FEATURE:
+            # Conformer exposes d_model; Citrinet uses the decoder input width.
+            student_dim = int(cfg.encoder.get("d_model", cfg.decoder.feat_in))
+            self.carl_projection = nn.Conv1d(student_dim, self.carl_teacher_dim, kernel_size=1)
+            # ConvASRDecoder receives encoder output as (B, D, T).
+            self.decoder.decoder_layers.register_forward_pre_hook(self._capture_student_encoder)
+
+        if self.kd_mode == "carl":
+            if not self.carl_classifier_path:
+                raise ValueError("kd_mode='carl' requires carl_classifier_path")
+            artifact = torch.load(self.carl_classifier_path, map_location="cpu", weights_only=False)
+            weight = artifact["weight"].float()
+            bias = artifact["bias"].float()
+            if weight.ndim == 2:
+                weight = weight.unsqueeze(-1)
+            if weight.shape[1] != self.carl_teacher_dim:
+                raise ValueError(
+                    f"CARL classifier dim {weight.shape[1]} != carl_teacher_dim {self.carl_teacher_dim}")
+            if weight.shape[0] != self.decoder.num_classes_with_blank:
+                raise ValueError("CARL teacher/student vocabulary mismatch")
+            self.register_buffer("carl_classifier_weight", weight)
+            self.register_buffer("carl_classifier_bias", bias)
+
         self._wer_accum = {}
+
+    def _capture_student_encoder(self, module, inp):
+        self._student_encoder_features = inp[0]
 
     def _capture_skd_hidden(self, module, inp, out):
         # ConformerLayer returns x tensor (B, T, d_model) when not streaming
@@ -323,6 +437,8 @@ class TransitionKDModel(EncDecCTCModelBPE):
         require_sctc=False,
         require_combined_kd=False,
         require_boundary_kd=False,
+        require_free_emit=False,
+        require_carl_feature=False,
     ):
         return make_dataloader(
             cfg.manifest_filepath,
@@ -330,6 +446,7 @@ class TransitionKDModel(EncDecCTCModelBPE):
             batch_size=cfg.batch_size,
             shuffle=shuffle,
             sample_rate=cfg.sample_rate,
+            max_duration=cfg.get("max_duration", None),
             num_workers=cfg.get("num_workers", 4),
             pin_memory=cfg.get("pin_memory", True),
             require_transition=require_transition,
@@ -339,6 +456,8 @@ class TransitionKDModel(EncDecCTCModelBPE):
             require_sctc=require_sctc,
             require_combined_kd=require_combined_kd,
             require_boundary_kd=require_boundary_kd,
+            require_free_emit=require_free_emit,
+            require_carl_feature=require_carl_feature,
         )
 
     def setup_training_data(self, cfg):
@@ -353,6 +472,8 @@ class TransitionKDModel(EncDecCTCModelBPE):
             require_sctc=(kd_mode in _NEEDS_SCTC),
             require_combined_kd=(kd_mode == "combined"),
             require_boundary_kd=(kd_mode in _NEEDS_BOUNDARY_KD),
+            require_free_emit=(kd_mode in _NEEDS_FREE_EMIT),
+            require_carl_feature=(kd_mode in _NEEDS_CARL_FEATURE),
         )
 
     def setup_validation_data(self, cfg):
@@ -416,6 +537,15 @@ class TransitionKDModel(EncDecCTCModelBPE):
             return valid & (non_blank | (blank_frames & random_gate))
 
         raise ValueError(f"unknown logit_kd_blank_mode: {mode}")
+
+    def _reduce_frame_kd(self, per_frame, active):
+        """Reduce masked frame losses locally or as the paper's sequence sum."""
+        mask = active.to(per_frame.dtype)
+        if self.logit_kd_reduction == "utterance_sum":
+            # Hilmes et al. Eq. (2)/(3): sum over frames/classes per sequence.
+            return (per_frame * mask).sum(dim=1).mean()
+        return (per_frame * mask).sum() / mask.sum().clamp_min(1.0)
+
 
     # ------------------------------------------------------------------
     # KL decomposition at d=1 blank frames
@@ -553,18 +683,43 @@ class TransitionKDModel(EncDecCTCModelBPE):
         ce = -(probs * selected_lp).sum(dim=-1)  # (B, T)
 
         active = active_override if active_override is not None else self._blank_active_mask(ids, probs, valid)
-        return (ce * active.to(ce.dtype)).sum() / active.float().sum().clamp_min(1)
+        return self._reduce_frame_kd(ce, active)
+
+    def _frame_dense_kd_loss(self, log_probs, enc_len, teacher_probs, teacher_lens):
+        """Full-vocabulary frame KD without top-k truncation or renormalization."""
+        B, T, V = log_probs.shape
+        T_t = teacher_probs.shape[1]
+        teacher_probs = teacher_probs.to(log_probs.device, dtype=log_probs.dtype)
+        teacher_probs = teacher_probs / teacher_probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        teacher_lens = teacher_lens.to(log_probs.device)
+        if teacher_probs.shape[2] != V:
+            raise ValueError(f"teacher/student vocabulary mismatch: {teacher_probs.shape[2]} != {V}")
+        if T_t == T:
+            probs = teacher_probs
+            valid_len = torch.minimum(enc_len, teacher_lens)
+            valid = torch.arange(T, device=log_probs.device).view(1, T) < valid_len.view(B, 1)
+        else:
+            pos = (torch.arange(T, device=log_probs.device, dtype=torch.float32) + 0.5).view(1, T)
+            idx = torch.floor(pos / enc_len.float().view(B, 1).clamp_min(1) * teacher_lens.float().view(B, 1)).long()
+            idx = torch.minimum(idx, (teacher_lens - 1).view(B, 1)).clamp_min(0)
+            probs = torch.gather(teacher_probs, 1, idx.unsqueeze(-1).expand(B, T, V))
+            valid = torch.arange(T, device=log_probs.device).view(1, T) < enc_len.view(B, 1)
+        student_lp = torch.log_softmax(log_probs / self.logit_kd_temperature, dim=-1)
+        ce = -(probs * student_lp).sum(dim=-1)
+        top1_ids = probs.argmax(dim=-1, keepdim=True)
+        top1_probs = torch.gather(probs, 2, top1_ids)
+        active = self._blank_active_mask(top1_ids, top1_probs, valid)
+        return self._reduce_frame_kd(ce, active)
 
     # ------------------------------------------------------------------
     # Guided KD loss (Kurata & Audhkhasi 2019)
-    # Hard cross-entropy at teacher non-blank frames only.
-    # Different from KD-BE (soft top-k KL) — uses only teacher argmax (hard label).
+    # Maximize the selected posterior at teacher non-blank argmax frames.
+    # This is -p(student), not hard cross-entropy -log p(student).
     # ------------------------------------------------------------------
     def _guided_kd_loss(self, log_probs, enc_len, fkd_ids, fkd_probs, fkd_lens):
         batch, frames, K = log_probs.shape
         teacher_frames = fkd_ids.shape[1]
         topk = fkd_ids.shape[2]
-        student_lp = torch.log_softmax(log_probs, dim=-1)  # no temperature for hard labels
 
         if teacher_frames == frames:
             ids = fkd_ids.to(log_probs.device)
@@ -581,14 +736,33 @@ class TransitionKDModel(EncDecCTCModelBPE):
             probs = torch.gather(fkd_probs.to(log_probs.device, dtype=log_probs.dtype), 1, gather_idx)
             valid = torch.arange(frames, device=log_probs.device).view(1, frames) < enc_len.view(batch, 1)
 
-        # Hard CE: only use teacher argmax (top-1) token as label
         teacher_argmax = ids[:, :, 0].clamp(0, K - 1)  # (B, T)
-        hard_ce = -torch.gather(student_lp, 2, teacher_argmax.unsqueeze(2)).squeeze(2)  # (B, T)
+        selected = torch.gather(log_probs.exp(), 2, teacher_argmax.unsqueeze(2)).squeeze(2)
+        active = valid & (teacher_argmax != self.blank_id)
+        # Paper L_G is a raw sum over selected positions for each sequence.
+        return (-(selected * active.to(selected.dtype)).sum(dim=1)).mean()
 
-        # Non-blank mask: only supervise at teacher non-blank frames
-        non_blank = (ids[:, :, 0] != self.blank_id)
-        active = valid & non_blank
-        return (hard_ce * active.to(hard_ce.dtype)).sum() / active.float().sum().clamp_min(1)
+    def _guided_dense_loss(self, log_probs, enc_len, teacher_probs, teacher_lens):
+        """Guided CTC paper objective using a dense teacher cache."""
+        B, T, V = log_probs.shape
+        T_t = teacher_probs.shape[1]
+        teacher_probs = teacher_probs.to(log_probs.device, dtype=log_probs.dtype)
+        teacher_probs = teacher_probs / teacher_probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        teacher_lens = teacher_lens.to(log_probs.device)
+        if T_t == T:
+            probs = teacher_probs
+            valid_len = torch.minimum(enc_len, teacher_lens)
+            valid = torch.arange(T, device=log_probs.device).view(1, T) < valid_len.view(B, 1)
+        else:
+            pos = (torch.arange(T, device=log_probs.device, dtype=torch.float32) + 0.5).view(1, T)
+            idx = torch.floor(pos / enc_len.float().view(B, 1).clamp_min(1) * teacher_lens.float().view(B, 1)).long()
+            idx = torch.minimum(idx, (teacher_lens - 1).view(B, 1)).clamp_min(0)
+            probs = torch.gather(teacher_probs, 1, idx.unsqueeze(-1).expand(B, T, V))
+            valid = torch.arange(T, device=log_probs.device).view(1, T) < enc_len.view(B, 1)
+        teacher_argmax = probs.argmax(dim=-1)
+        active = valid & (teacher_argmax != self.blank_id)
+        selected = torch.gather(log_probs.exp(), 2, teacher_argmax.unsqueeze(-1)).squeeze(-1)
+        return (-(selected * active.to(selected.dtype)).sum(dim=1)).mean()
 
     # ------------------------------------------------------------------
     # Delayed logit KD loss (Li et al. 2025, TAB adapted for non-streaming)
@@ -872,6 +1046,307 @@ class TransitionKDModel(EncDecCTCModelBPE):
         }
         return total / denom
 
+    def _span_coarse_loss(self, log_probs, enc_len, support, gates,
+                          num_tokens, teacher_frames, tokens, token_lens,
+                          teacher_mass3=None, student_support=None):
+        """Primary span loss without class-level non-target overlap.
+
+        hard_gt pools the student with the token occupancy and applies CE only
+        to the occurrence GT.  mass3 instead matches the teacher's exact coarse
+        [blank, occurrence-GT, all non-target] distribution.  The latter leaves
+        relations *inside* the non-target bucket exclusively to NTDK.
+        """
+        B, T_s, vocab = log_probs.shape
+        device, dtype = log_probs.device, log_probs.dtype
+        student_prob = log_probs.exp().to(dtype)
+        total = torch.zeros((), device=device, dtype=dtype)
+        total_w = torch.zeros((), device=device, dtype=dtype)
+        d_student = torch.zeros(3, device=device, dtype=dtype)
+        d_teacher = torch.zeros(3, device=device, dtype=dtype)
+        d_student_content = torch.zeros(2, device=device, dtype=dtype)
+        d_teacher_content = torch.zeros(2, device=device, dtype=dtype)
+
+        for b in range(B):
+            n = min(
+                int(num_tokens[b].item()), int(token_lens[b].item()),
+                support.shape[1])
+            ts = min(int(enc_len[b].item()), T_s)
+            tt = min(int(teacher_frames[b].item()), support.shape[2])
+            if teacher_mass3 is not None:
+                n = min(n, teacher_mass3.shape[1])
+            if n <= 0 or ts <= 0 or tt <= 0:
+                continue
+
+            if student_support is not None:
+                n = min(n, student_support.shape[1])
+                sup_s = student_support[b, :n, :ts].to(device=device, dtype=dtype)
+            else:
+                sup_t = support[b, :n, :tt].to(device=device, dtype=dtype)
+                base = torch.arange(ts, device=device, dtype=torch.float32) / max(ts, 1) * tt
+                idx_a = torch.floor(base + 0.25 * tt / max(ts, 1)).long().clamp(0, tt - 1)
+                idx_b = torch.floor(base + 0.75 * tt / max(ts, 1)).long().clamp(0, tt - 1)
+                sup_s = 0.5 * (sup_t[:, idx_a] + sup_t[:, idx_b])
+            sup_s = self._transform_support(sup_s)
+            sup_sum = sup_s.sum(dim=1)
+            sup_s = sup_s / sup_sum.clamp_min(1e-8).unsqueeze(1)
+            s_avg = torch.matmul(sup_s, student_prob[b, :ts])
+
+            gt = tokens[b, :n].to(device).clamp(0, vocab - 1)
+            row = torch.arange(n, device=device)
+            s_blank = s_avg[:, self.blank_id]
+            s_gt = s_avg[row, gt]
+            s_nt = (1.0 - s_blank - s_gt).clamp_min(0.0)
+            s_mass = torch.stack([s_blank, s_gt, s_nt], dim=1)
+            s_mass = s_mass / s_mass.sum(dim=1, keepdim=True).clamp_min(1e-9)
+
+            if self.span_primary_mode == "hard_gt":
+                per_token = -s_gt.clamp_min(1e-9).log()
+                t_mass = torch.zeros_like(s_mass)
+                t_mass[:, 1] = 1.0
+            elif self.span_primary_mode == "mass3":
+                if teacher_mass3 is None:
+                    raise ValueError("span_primary_mode=mass3 requires teacher mass3 targets")
+                t_mass = teacher_mass3[b, :n].to(device=device, dtype=dtype)
+                t_mass = t_mass / t_mass.sum(dim=1, keepdim=True).clamp_min(1e-9)
+                positive = t_mass > 0
+                terms = torch.where(
+                    positive,
+                    t_mass * (t_mass.clamp_min(1e-9).log()
+                              - s_mass.clamp_min(1e-9).log()),
+                    torch.zeros_like(t_mass))
+                per_token = terms.sum(dim=1)
+            elif self.span_primary_mode == "gt_nt":
+                if teacher_mass3 is None:
+                    raise ValueError("span_primary_mode=gt_nt requires teacher mass3 targets")
+                t_mass = teacher_mass3[b, :n].to(device=device, dtype=dtype)
+                t_mass = t_mass / t_mass.sum(dim=1, keepdim=True).clamp_min(1e-9)
+                # Remove the explicit pooled blank-mass target. We deliberately do not
+                # reweight by teacher nonblank mass: CTC is the only direct
+                # supervisor of blank/emission allocation in this ablation.
+                t_content = t_mass[:, 1:]
+                t_content = t_content / t_content.sum(dim=1, keepdim=True).clamp_min(1e-9)
+                s_content = s_mass[:, 1:]
+                s_content = s_content / s_content.sum(dim=1, keepdim=True).clamp_min(1e-9)
+                positive = t_content > 0
+                terms = torch.where(
+                    positive,
+                    t_content * (t_content.clamp_min(1e-9).log()
+                                 - s_content.clamp_min(1e-9).log()),
+                    torch.zeros_like(t_content))
+                per_token = terms.sum(dim=1)
+            else:
+                raise RuntimeError(f"coarse loss called for mode {self.span_primary_mode!r}")
+
+            w = gates[b, :n].to(device=device, dtype=dtype)
+            active = (w >= self.span_kd_gate_threshold) & (sup_sum > 1e-6)
+            if active.any():
+                wa = w[active]
+                total = total + (per_token[active] * wa).sum()
+                total_w = total_w + wa.sum()
+                d_student = d_student + (s_mass[active] * wa.unsqueeze(1)).sum(dim=0)
+                d_teacher = d_teacher + (t_mass[active] * wa.unsqueeze(1)).sum(dim=0)
+                s_diag_content = s_mass[:, 1:]
+                s_diag_content = s_diag_content / s_diag_content.sum(dim=1, keepdim=True).clamp_min(1e-9)
+                t_diag_content = t_mass[:, 1:]
+                t_diag_content = t_diag_content / t_diag_content.sum(dim=1, keepdim=True).clamp_min(1e-9)
+                d_student_content = d_student_content + (s_diag_content[active] * wa.unsqueeze(1)).sum(dim=0)
+                d_teacher_content = d_teacher_content + (t_diag_content[active] * wa.unsqueeze(1)).sum(dim=0)
+
+        denom = total_w.clamp_min(1.0)
+        self._span_primary_diag = {
+            "loss": (total / denom).detach(),
+            "teacher_blank": (d_teacher[0] / denom).detach(),
+            "teacher_gt": (d_teacher[1] / denom).detach(),
+            "teacher_nt": (d_teacher[2] / denom).detach(),
+            "student_blank": (d_student[0] / denom).detach(),
+            "student_gt": (d_student[1] / denom).detach(),
+            "student_nt": (d_student[2] / denom).detach(),
+            "teacher_gt_given_nb": (d_teacher_content[0] / denom).detach(),
+            "teacher_nt_given_nb": (d_teacher_content[1] / denom).detach(),
+            "student_gt_given_nb": (d_student_content[0] / denom).detach(),
+            "student_nt_given_nb": (d_student_content[1] / denom).detach(),
+        }
+        return total / denom
+
+    def _span_ntdk_loss(self, log_probs, enc_len, support, dark_ids, dark_probs,
+                        dark_tail_prob, gates, num_tokens, teacher_frames,
+                        tokens, token_lens, teacher_mass3=None):
+        """KL over raw teacher non-target relations using top-M + tail.
+
+        Teacher targets have blank and occurrence GT removed and are already
+        normalized over all remaining classes. Student probabilities are pooled
+        with the same teacher occupancy, then factorized identically. The tail
+        bucket preserves all non-selected nonblank/non-GT probability rather
+        than introducing top-k renormalization bias.
+        """
+        B, T_s, vocab = log_probs.shape
+        device, dtype = log_probs.device, log_probs.dtype
+        student_prob = log_probs.exp().to(dtype)
+        total = torch.zeros((), device=device, dtype=dtype)
+        total_w = torch.zeros((), device=device, dtype=dtype)
+        d_teacher_tail = torch.zeros((), device=device, dtype=dtype)
+        d_student_tail = torch.zeros((), device=device, dtype=dtype)
+        d_teacher_entropy = torch.zeros((), device=device, dtype=dtype)
+        d_base_w = torch.zeros((), device=device, dtype=dtype)
+        d_rel_w = torch.zeros((), device=device, dtype=dtype)
+        d_rel_pass = torch.zeros((), device=device, dtype=dtype)
+
+        for b in range(B):
+            n = min(
+                int(num_tokens[b].item()), int(token_lens[b].item()),
+                support.shape[1], dark_ids.shape[1])
+            ts = min(int(enc_len[b].item()), T_s)
+            tt = min(int(teacher_frames[b].item()), support.shape[2])
+            if self.span_ntdk_reliability or self.span_ntdk_mass_weighted:
+                if teacher_mass3 is None:
+                    raise ValueError("mass-weighted NTDK requires mass3 targets")
+                n = min(n, teacher_mass3.shape[1])
+            if n <= 0 or ts <= 0 or tt <= 0:
+                continue
+
+            sup_t = support[b, :n, :tt].to(device=device, dtype=dtype)
+            base = torch.arange(ts, device=device, dtype=torch.float32) / max(ts, 1) * tt
+            idx_a = torch.floor(base + 0.25 * tt / max(ts, 1)).long().clamp(0, tt - 1)
+            idx_b = torch.floor(base + 0.75 * tt / max(ts, 1)).long().clamp(0, tt - 1)
+            sup_s = 0.5 * (sup_t[:, idx_a] + sup_t[:, idx_b])
+            sup_s = self._transform_support(sup_s)
+            sup_sum = sup_s.sum(dim=1)
+            sup_s = sup_s / sup_sum.clamp_min(1e-8).unsqueeze(1)
+            s_avg = torch.matmul(sup_s, student_prob[b, :ts])
+
+            ids = dark_ids[b, :n].to(device).clamp(0, vocab - 1)
+            t_selected = dark_probs[b, :n].to(device=device, dtype=dtype)
+            t_tail = dark_tail_prob[b, :n].to(device=device, dtype=dtype)
+            t_nt = torch.cat([t_selected, t_tail.unsqueeze(1)], dim=1)
+            t_nt = t_nt / t_nt.sum(dim=1, keepdim=True).clamp_min(1e-9)
+
+            gt = tokens[b, :n].to(device).clamp(0, vocab - 1)
+            row = torch.arange(n, device=device)
+            nt_mass = (
+                1.0 - s_avg[:, self.blank_id] - s_avg[row, gt]
+            ).clamp_min(1e-9)
+            s_selected = torch.gather(s_avg, 1, ids)
+            s_tail = (nt_mass - s_selected.sum(dim=1)).clamp_min(0.0)
+            s_nt = torch.cat([s_selected, s_tail.unsqueeze(1)], dim=1)
+            s_nt = s_nt / s_nt.sum(dim=1, keepdim=True).clamp_min(1e-9)
+
+            positive = t_nt > 0
+            kl_terms = torch.where(
+                positive,
+                t_nt * (t_nt.clamp_min(1e-9).log() - s_nt.clamp_min(1e-9).log()),
+                torch.zeros_like(t_nt))
+            kl = kl_terms.sum(dim=1)
+
+            w = gates[b, :n].to(device=device, dtype=dtype)
+            active = (w >= self.span_kd_gate_threshold) & (sup_sum > 1e-6)
+            reliability = torch.ones(n, device=device, dtype=dtype)
+            if self.span_ntdk_reliability or self.span_ntdk_mass_weighted:
+                tm = teacher_mass3[b, :n].to(device=device, dtype=dtype)
+                tm = tm / tm.sum(dim=1, keepdim=True).clamp_min(1e-9)
+                t_gt_abs, t_nt_abs = tm[:, 1], tm[:, 2]
+                if self.span_ntdk_mass_weighted:
+                    reliability = t_nt_abs
+                else:
+                    t_gt_given_nb = t_gt_abs / (t_gt_abs + t_nt_abs).clamp_min(1e-9)
+                    reliability = t_nt_abs.clamp(
+                        min=self.span_ntdk_rel_min, max=self.span_ntdk_rel_max
+                    ).pow(self.span_ntdk_rel_power)
+                    reliability = reliability * (t_gt_given_nb >= self.span_ntdk_rel_gt_min).to(dtype)
+            if active.any():
+                base_wa = w[active]
+                wa = base_wa * reliability[active]
+                total = total + (kl[active] * wa).sum()
+                # Keep the token denominator for exact mean p_T(NT) * KL_cond.
+                # Dividing by sum(p_T(NT)) would cancel the mass attenuation.
+                if self.span_ntdk_mass_weighted:
+                    total_w = total_w + base_wa.sum()
+                else:
+                    total_w = total_w + wa.sum()
+                d_base_w = d_base_w + base_wa.sum()
+                d_rel_w = d_rel_w + wa.sum()
+                d_rel_pass = d_rel_pass + (
+                    base_wa * (reliability[active] > 0).to(dtype)
+                ).sum()
+                d_teacher_tail = d_teacher_tail + (t_nt[active, -1] * wa).sum()
+                d_student_tail = d_student_tail + (s_nt[active, -1] * wa).sum()
+                entropy = -(t_nt[active] * t_nt[active].clamp_min(1e-9).log()).sum(dim=1)
+                d_teacher_entropy = d_teacher_entropy + (entropy * wa).sum()
+
+        denom = total_w.clamp_min(1e-8)
+        self._span_ntdk_diag = {
+            "loss": (total / denom).detach(),
+            "teacher_tail": (d_teacher_tail / denom).detach(),
+            "student_tail": (d_student_tail / denom).detach(),
+            "teacher_entropy": (d_teacher_entropy / denom).detach(),
+            "reliability_mean": (d_rel_w / d_base_w.clamp_min(1e-8)).detach(),
+            "reliability_pass_frac": (d_rel_pass / d_base_w.clamp_min(1e-8)).detach(),
+        }
+        return total / denom
+
+    def _span_shoulder_loss(self, log_probs, enc_len, core_support,
+                            expanded_support, gates, num_tokens,
+                            teacher_frames, tokens, token_lens):
+        """Occurrence-GT emission on the positive delta-induced FB residual.
+
+        The residual is formed on the teacher grid before resampling. It is
+        normalized independently per occurrence, so the delta=0 core retains
+        its original Mass3/NTDK scale. Tokens with no positive residual are
+        skipped (in particular, delta=0 gives an exact zero loss).
+        """
+        B, T_s, vocab = log_probs.shape
+        device, dtype = log_probs.device, log_probs.dtype
+        student_prob = log_probs.exp().to(dtype)
+        total = log_probs.sum() * 0.0
+        total_w = torch.zeros((), device=device, dtype=dtype)
+        d_active = torch.zeros((), device=device, dtype=dtype)
+        d_tokens = torch.zeros((), device=device, dtype=dtype)
+        d_gt = torch.zeros((), device=device, dtype=dtype)
+
+        for b in range(B):
+            n = min(
+                int(num_tokens[b].item()), int(token_lens[b].item()),
+                core_support.shape[1], expanded_support.shape[1])
+            ts = min(int(enc_len[b].item()), T_s)
+            tt = min(
+                int(teacher_frames[b].item()), core_support.shape[2],
+                expanded_support.shape[2])
+            if n <= 0 or ts <= 0 or tt <= 0:
+                continue
+
+            core_t = core_support[b, :n, :tt].to(device=device, dtype=dtype)
+            expanded_t = expanded_support[b, :n, :tt].to(device=device, dtype=dtype)
+            residual_t = (expanded_t - core_t).clamp_min(0.0)
+
+            base = torch.arange(ts, device=device, dtype=torch.float32) / max(ts, 1) * tt
+            idx_a = torch.floor(base + 0.25 * tt / max(ts, 1)).long().clamp(0, tt - 1)
+            idx_b = torch.floor(base + 0.75 * tt / max(ts, 1)).long().clamp(0, tt - 1)
+            residual_s = 0.5 * (residual_t[:, idx_a] + residual_t[:, idx_b])
+            residual_sum = residual_s.sum(dim=1)
+            residual_s = residual_s / residual_sum.clamp_min(1e-8).unsqueeze(1)
+            s_avg = torch.matmul(residual_s, student_prob[b, :ts])
+
+            gt = tokens[b, :n].to(device).clamp(0, vocab - 1)
+            row = torch.arange(n, device=device)
+            s_gt = s_avg[row, gt]
+            per_token = -s_gt.clamp_min(1e-9).log()
+            w = gates[b, :n].to(device=device, dtype=dtype)
+            active = (w >= self.span_kd_gate_threshold) & (residual_sum > 1e-6)
+            d_tokens = d_tokens + torch.tensor(float(n), device=device, dtype=dtype)
+            if active.any():
+                wa = w[active]
+                total = total + (per_token[active] * wa).sum()
+                total_w = total_w + wa.sum()
+                d_active = d_active + active.sum().to(dtype)
+                d_gt = d_gt + (s_gt[active] * wa).sum()
+
+        denom = total_w.clamp_min(1.0)
+        self._span_shoulder_diag = {
+            "loss": (total / denom).detach(),
+            "active_frac": (d_active / d_tokens.clamp_min(1.0)).detach(),
+            "student_gt": (d_gt / denom).detach(),
+        }
+        return total / denom
+
     def _sctc_loss(self, log_probs, enc_len, sctc_gamma, sctc_bpe_ids,
                    num_tokens, teacher_frames):
         """Sequence-level KD (Huang et al. 2018, Eq. 10).
@@ -1097,6 +1572,212 @@ class TransitionKDModel(EncDecCTCModelBPE):
         return inter_log_probs, loss_skd
 
     # ------------------------------------------------------------------
+    # FPKD / Frame-DKD / CARL paper baselines
+    # ------------------------------------------------------------------
+    def _align_dense_teacher(self, log_probs, enc_len, teacher_probs, teacher_lens):
+        """Nearest-centre teacher-to-student frame mapping with validity mask."""
+        B, T, V = log_probs.shape
+        # Keep the cached bfloat16 posterior in float32. Casting it to an
+        # autocast/student dtype here can underflow the small probabilities that
+        # become relevant again for high-temperature KD (notably DKD at T=4).
+        teacher_probs = teacher_probs.to(log_probs.device, dtype=torch.float32)
+        teacher_probs = teacher_probs / teacher_probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        teacher_lens = teacher_lens.to(log_probs.device)
+        if teacher_probs.shape[-1] != V:
+            raise ValueError("teacher/student vocabulary mismatch")
+        pos = (torch.arange(T, device=log_probs.device, dtype=torch.float32) + 0.5).view(1, T)
+        idx = torch.floor(
+            pos / enc_len.float().view(B, 1).clamp_min(1)
+            * teacher_lens.float().view(B, 1)
+        ).long()
+        idx = torch.minimum(idx, (teacher_lens - 1).view(B, 1)).clamp_min(0)
+        probs = torch.gather(teacher_probs, 1, idx.unsqueeze(-1).expand(B, T, V))
+        valid = torch.arange(T, device=log_probs.device).view(1, T) < enc_len.view(B, 1)
+        return probs, valid
+
+    @staticmethod
+    def _teacher_probs_at_temperature(probs, temperature):
+        """Recover a temperature-scaled distribution from cached T=1 probs.
+
+        For p=softmax(z), softmax(z/T) is exactly p**(1/T), renormalized.
+        Computing that identity directly avoids imposing a large log floor on
+        the long CTC vocabulary tail. Exact cached zeros remain zero rather
+        than being assigned artificial probability mass.
+        """
+        temp = float(temperature)
+        if temp <= 0.0:
+            raise ValueError(f"temperature must be positive, got {temp}")
+        weights = probs.float().clamp_min(0.0).pow(1.0 / temp)
+        return weights / weights.sum(dim=-1, keepdim=True).clamp_min(
+            torch.finfo(weights.dtype).tiny)
+
+    @staticmethod
+    def _masked_mean(values, mask):
+        weight = mask.to(values.dtype)
+        return (values * weight).sum() / weight.sum().clamp_min(1.0)
+
+    @staticmethod
+    def _binary_bernoulli_kl(teacher_positive, student_positive):
+        """Numerically stable KL between Bernoulli distributions.
+
+        Dense CTC targets are cached at reduced precision and therefore often
+        contain exact zeros and ones. Preserve those exact teacher targets,
+        but keep the student logarithm away from zero. ``xlogy`` implements
+        the limiting value 0 * log(0) = 0 without producing NaNs.
+        """
+        teacher_positive = teacher_positive.float().clamp(0.0, 1.0)
+        student_positive = student_positive.float()
+        eps = 1e-6  # representable below 1.0 in float32 (unlike 1e-8)
+        student_positive = student_positive.clamp(eps, 1.0 - eps)
+        teacher = torch.stack(
+            [teacher_positive, 1.0 - teacher_positive], dim=-1)
+        student = torch.stack(
+            [student_positive, 1.0 - student_positive], dim=-1)
+        return (
+            torch.special.xlogy(teacher, teacher)
+            - torch.special.xlogy(teacher, student)
+        ).sum(dim=-1)
+
+    def _binary_blank_kl(self, log_probs, enc_len, teacher_probs, teacher_lens, temperature):
+        probs, valid = self._align_dense_teacher(log_probs, enc_len, teacher_probs, teacher_lens)
+        temp = float(temperature)
+        t_prob = self._teacher_probs_at_temperature(probs, temp)
+        s_prob = torch.softmax(log_probs / temp, dim=-1)
+        tb = t_prob[..., self.blank_id]
+        sb = s_prob[..., self.blank_id]
+        kl = self._binary_bernoulli_kl(tb, sb) * (temp ** 2)
+        return self._masked_mean(kl, valid)
+
+    def _fpkd_fkl_loss(self, log_probs, enc_len, teacher_probs, teacher_lens):
+        """Factorized KL: BKL on all frames + reweighted NBFKL on teacher NB frames.
+
+        The BFKL term (conditional nonblank distribution at teacher blank frames)
+        is deliberately eliminated, as prescribed by Tian et al. 2024.
+        """
+        probs, valid = self._align_dense_teacher(log_probs, enc_len, teacher_probs, teacher_lens)
+        temp = self.fpkd_temperature
+        t_prob = self._teacher_probs_at_temperature(probs, temp)
+        s_lp = torch.log_softmax(log_probs / temp, dim=-1)
+        s_prob = s_lp.exp()
+
+        tb = t_prob[..., self.blank_id]
+        sb = s_prob[..., self.blank_id]
+        bkl_frame = self._binary_bernoulli_kl(tb, sb) * (temp ** 2)
+        bkl = self._masked_mean(bkl_frame, valid)
+
+        nb_mask = valid & (probs.argmax(-1) != self.blank_id)
+        t_nb = t_prob.clone()
+        t_nb[..., self.blank_id] = 0.0
+        t_nb = t_nb / t_nb.sum(-1, keepdim=True).clamp_min(1e-12)
+        s_nb_logits = log_probs / temp
+        s_nb_logits = s_nb_logits.clone()
+        s_nb_logits[..., self.blank_id] = -1e4
+        s_nb_lp = torch.log_softmax(s_nb_logits, dim=-1)
+        nbf_terms = torch.where(
+            t_nb > 0, t_nb * (t_nb.clamp_min(1e-12).log() - s_nb_lp),
+            torch.zeros_like(t_nb))
+        # Exact KL factorization carries the teacher nonblank mass outside
+        # the conditional nonblank-token KL.
+        nbf_frame = (1.0 - tb) * nbf_terms.sum(-1) * (temp ** 2)
+        nbfkl = self._masked_mean(nbf_frame, nb_mask)
+        return self.fpkd_bkl_weight * bkl + self.fpkd_nbf_weight * nbfkl, bkl, nbfkl
+
+    def _feature_kd_loss(self, enc_len, teacher_features, teacher_lens, balanced=False):
+        student = self._student_encoder_features
+        if student is None:
+            raise RuntimeError("student encoder feature hook did not run")
+        projected = self.carl_projection(student)  # (B, D_teacher, T_student)
+        total_nb = projected.new_zeros(())
+        total_b = projected.new_zeros(())
+        count_nb = projected.new_zeros(())
+        count_b = projected.new_zeros(())
+        for b in range(projected.shape[0]):
+            ts = min(int(enc_len[b].item()), projected.shape[-1])
+            tt = min(int(teacher_lens[b].item()), teacher_features.shape[1])
+            if ts <= 0 or tt <= 0:
+                continue
+            tf = teacher_features[b, :tt].to(projected.device, projected.dtype).transpose(0, 1)
+            tf = F.interpolate(tf.unsqueeze(0), size=ts, mode="linear", align_corners=False).squeeze(0)
+            per = 1.0 - F.cosine_similarity(projected[b, :, :ts], tf, dim=0)
+            if balanced:
+                # FRKD blank/nonblank masks are supplied by the caller.
+                raise RuntimeError("balanced feature loss requires _fpkd_frkd_loss")
+            total_nb = total_nb + per.sum()
+            count_nb = count_nb + ts
+        return total_nb / count_nb.clamp_min(1.0)
+
+    def _fpkd_frkd_loss(self, enc_len, teacher_features, teacher_feature_lens,
+                        teacher_probs, teacher_prob_lens):
+        student = self._student_encoder_features
+        if student is None:
+            raise RuntimeError("student encoder feature hook did not run")
+        projected = self.carl_projection(student)
+        # Align the teacher posterior only to obtain the paper's blank/NB split.
+        dummy_lp = projected.new_zeros(projected.shape[0], projected.shape[-1],
+                                       teacher_probs.shape[-1])
+        probs, _ = self._align_dense_teacher(dummy_lp, enc_len, teacher_probs, teacher_prob_lens)
+        top1 = probs.argmax(-1)
+        nb_total = projected.new_zeros(())
+        b_total = projected.new_zeros(())
+        nb_count = projected.new_zeros(())
+        b_count = projected.new_zeros(())
+        for b in range(projected.shape[0]):
+            ts = min(int(enc_len[b].item()), projected.shape[-1])
+            tt = min(int(teacher_feature_lens[b].item()), teacher_features.shape[1])
+            if ts <= 0 or tt <= 0:
+                continue
+            tf = teacher_features[b, :tt].to(projected.device, projected.dtype).transpose(0, 1)
+            tf = F.interpolate(tf.unsqueeze(0), size=ts, mode="linear", align_corners=False).squeeze(0)
+            per = 1.0 - F.cosine_similarity(projected[b, :, :ts], tf, dim=0)
+            nb = top1[b, :ts] != self.blank_id
+            blank = ~nb
+            nb_total = nb_total + (per * nb.to(per.dtype)).sum()
+            b_total = b_total + (per * blank.to(per.dtype)).sum()
+            nb_count = nb_count + nb.sum()
+            b_count = b_count + blank.sum()
+        # Equal group weight removes the extreme CTC blank-frame imbalance.
+        return 0.5 * (nb_total / nb_count.clamp_min(1.0) + b_total / b_count.clamp_min(1.0))
+
+    def _frame_dkd_loss(self, log_probs, enc_len, teacher_probs, teacher_lens):
+        probs, valid = self._align_dense_teacher(log_probs, enc_len, teacher_probs, teacher_lens)
+        temp = self.frame_dkd_temperature
+        t_prob = self._teacher_probs_at_temperature(probs, temp)
+        s_prob = torch.softmax(log_probs / temp, dim=-1)
+        target = probs.argmax(-1)
+        tp = torch.gather(t_prob, -1, target.unsqueeze(-1)).squeeze(-1).clamp(1e-8, 1 - 1e-8)
+        sp = torch.gather(s_prob, -1, target.unsqueeze(-1)).squeeze(-1).clamp(1e-8, 1 - 1e-8)
+        t_bin = torch.stack([tp, 1 - tp], -1)
+        s_bin = torch.stack([sp, 1 - sp], -1)
+        tckd = (t_bin * (t_bin.log() - s_bin.log())).sum(-1) * (temp ** 2)
+
+        target_mask = F.one_hot(target, num_classes=log_probs.shape[-1]).bool()
+        t_nt = t_prob.masked_fill(target_mask, 0.0)
+        s_nt = s_prob.masked_fill(target_mask, 0.0)
+        t_nt = t_nt / t_nt.sum(-1, keepdim=True).clamp_min(1e-12)
+        s_nt = s_nt / s_nt.sum(-1, keepdim=True).clamp_min(1e-12)
+        nckd = (t_nt * (t_nt.clamp_min(1e-12).log() - s_nt.clamp_min(1e-12).log())).sum(-1)
+        nckd = nckd * (temp ** 2)
+        return (self.frame_dkd_alpha * self._masked_mean(tckd, valid)
+                + self.frame_dkd_beta * self._masked_mean(nckd, valid))
+
+    def _carl_be_loss(self, student_lp, enc_len, teacher_probs, teacher_lens):
+        probs, valid = self._align_dense_teacher(student_lp, enc_len, teacher_probs, teacher_lens)
+        temp = self.carl_temperature
+        t_prob = self._teacher_probs_at_temperature(probs, temp)
+        s_lp = torch.log_softmax(student_lp / temp, dim=-1)
+        kl = F.kl_div(s_lp, t_prob, reduction="none").sum(-1)
+        active = valid & (probs.argmax(-1) != self.blank_id)
+        return self._masked_mean(kl, active)
+
+    def _carl_projected_log_probs(self):
+        student = self._student_encoder_features
+        if student is None:
+            raise RuntimeError("student encoder feature hook did not run")
+        projected = self.carl_projection(student)
+        logits = F.conv1d(projected, self.carl_classifier_weight, self.carl_classifier_bias)
+        return torch.log_softmax(logits.transpose(1, 2), dim=-1)
+
+    # ------------------------------------------------------------------
     # CR-CTC (Yao et al. 2025): dual-view consistency regularization
     # ------------------------------------------------------------------
     def _cr_ctc_forward_view(self, input_signal, input_signal_length):
@@ -1212,12 +1893,18 @@ class TransitionKDModel(EncDecCTCModelBPE):
             loss = self._mix(loss_ctc, loss_kd)
 
         elif self.kd_mode == "logit":
-            loss_kd = self._frame_logit_kd_loss(
-                log_probs, enc_len,
-                batch["fkd_ids"], batch["fkd_probs"], batch["fkd_lens"],
-            )
+            if "fkd_dense_probs" in batch:
+                loss_kd = self._frame_dense_kd_loss(
+                    log_probs, enc_len, batch["fkd_dense_probs"], batch["fkd_lens"])
+            else:
+                loss_kd = self._frame_logit_kd_loss(
+                    log_probs, enc_len,
+                    batch["fkd_ids"], batch["fkd_probs"], batch["fkd_lens"],
+                )
             loss = self._mix(loss_ctc, loss_kd)
             if self.logit_kd_occ_weight > 0.0 or self.logit_kd_res_weight > 0.0:
+                if "fkd_dense_probs" in batch:
+                    raise ValueError("OCC/RES auxiliary losses are unsupported for dense frame targets")
                 loss_occ, loss_res = self._frame_occ_res_loss(
                     log_probs, enc_len,
                     batch["fkd_ids"], batch["fkd_probs"], batch["fkd_lens"],
@@ -1230,10 +1917,14 @@ class TransitionKDModel(EncDecCTCModelBPE):
                     self.log("train/res_loss", loss_res, on_step=True, on_epoch=True)
 
         elif self.kd_mode == "guided":
-            loss_kd = self._guided_kd_loss(
-                log_probs, enc_len,
-                batch["fkd_ids"], batch["fkd_probs"], batch["fkd_lens"],
-            )
+            if "fkd_dense_probs" in batch:
+                loss_kd = self._guided_dense_loss(
+                    log_probs, enc_len, batch["fkd_dense_probs"], batch["fkd_lens"])
+            else:
+                loss_kd = self._guided_kd_loss(
+                    log_probs, enc_len,
+                    batch["fkd_ids"], batch["fkd_probs"], batch["fkd_lens"],
+                )
             loss = self._mix(loss_ctc, loss_kd)
 
         elif self.kd_mode == "delayed_logit":
@@ -1285,17 +1976,112 @@ class TransitionKDModel(EncDecCTCModelBPE):
                         batch["tokens"], batch["token_lens"],
                         self.blank_id, blank_penalty=self.span_kd_student_delta,
                     )
-                loss_kd = self._span_kd_loss(
-                    log_probs, enc_len,
-                    batch["span_support"], batch["span_avg_ids"], batch["span_avg_probs"],
-                    batch["span_gates"], batch["span_num_tokens"], batch["span_teacher_frames"],
-                    student_support=student_sup,
-                )
+                if self.span_primary_mode == "legacy":
+                    loss_kd = self._span_kd_loss(
+                        log_probs, enc_len,
+                        batch["span_support"], batch["span_avg_ids"], batch["span_avg_probs"],
+                        batch["span_gates"], batch["span_num_tokens"], batch["span_teacher_frames"],
+                        student_support=student_sup,
+                    )
+                else:
+                    teacher_mass3 = None
+                    if self.span_primary_mode in ("mass3", "gt_nt"):
+                        if "span_mass3_probs" not in batch:
+                            raise ValueError(
+                                f"span_primary_mode={self.span_primary_mode} but batch lacks span_mass3_probs; "
+                                "build targets with --with-mass3")
+                        teacher_mass3 = batch["span_mass3_probs"]
+                    loss_kd = self._span_coarse_loss(
+                        log_probs, enc_len, batch["span_support"], batch["span_gates"],
+                        batch["span_num_tokens"], batch["span_teacher_frames"],
+                        batch["tokens"], batch["token_lens"],
+                        teacher_mass3=teacher_mass3, student_support=student_sup)
                 loss = self._mix(loss_ctc, loss_kd)
+                if self.span_ntdk_weight > 0.0:
+                    required = ("span_dark_ids", "span_dark_probs", "span_dark_tail_prob")
+                    missing = [key for key in required if key not in batch]
+                    if missing:
+                        raise ValueError(
+                            f"span_ntdk_weight={self.span_ntdk_weight} but batch lacks {missing}; "
+                            "build targets with --dark-top-m")
+                    loss_ntdk = self._span_ntdk_loss(
+                        log_probs, enc_len, batch["span_support"],
+                        batch["span_dark_ids"], batch["span_dark_probs"],
+                        batch["span_dark_tail_prob"], batch["span_gates"],
+                        batch["span_num_tokens"], batch["span_teacher_frames"],
+                        batch["tokens"], batch["token_lens"], teacher_mass3=batch.get("span_mass3_probs"))
+                    loss = loss + self.span_ntdk_weight * loss_ntdk
+                    for k, v in self._span_ntdk_diag.items():
+                        self.log(f"train/span_ntdk_{k}", v, on_step=True, on_epoch=True)
+                if self.span_shoulder_weight > 0.0:
+                    if "span_expanded_support" not in batch:
+                        raise ValueError(
+                            "span_shoulder_weight>0 but batch lacks span_expanded_support; "
+                            "use a core+shoulder manifest")
+                    loss_shoulder = self._span_shoulder_loss(
+                        log_probs, enc_len, batch["span_support"],
+                        batch["span_expanded_support"], batch["span_gates"],
+                        batch["span_num_tokens"], batch["span_teacher_frames"],
+                        batch["tokens"], batch["token_lens"])
+                    loss = loss + self.span_shoulder_weight * loss_shoulder
+                    for k, v in self._span_shoulder_diag.items():
+                        self.log(f"train/span_shoulder_{k}", v, on_step=True, on_epoch=True)
                 diag = getattr(self, "_span_diag", None)
                 if diag is not None:
                     for k, v in diag.items():
                         self.log(f"train/span_{k}", v, on_step=True, on_epoch=True)
+                primary_diag = getattr(self, "_span_primary_diag", None)
+                if primary_diag is not None:
+                    for k, v in primary_diag.items():
+                        self.log(f"train/span_primary_{k}", v, on_step=True, on_epoch=True)
+
+        elif self.kd_mode == "frame_dkd":
+            loss_kd = self._frame_dkd_loss(
+                log_probs, enc_len, batch["fkd_dense_probs"], batch["fkd_lens"])
+            warm = min(float(self.current_epoch + 1) / max(self.frame_dkd_warmup_epochs, 1), 1.0)
+            loss = loss_ctc + warm * loss_kd
+            self.log("train/frame_dkd_warm", warm, on_step=False, on_epoch=True)
+
+        elif self.kd_mode == "fpkd_dfkd":
+            loss_kd = self._binary_blank_kl(
+                log_probs, enc_len, batch["fkd_dense_probs"], batch["fkd_lens"],
+                self.fpkd_temperature)
+            loss = loss_kd
+
+        elif self.kd_mode == "fpkd_frkd":
+            loss_kd = self._fpkd_frkd_loss(
+                enc_len, batch["carl_features"], batch["carl_teacher_frames"],
+                batch["fkd_dense_probs"], batch["fkd_lens"])
+            loss = loss_kd
+
+        elif self.kd_mode == "fpkd_pkd":
+            loss_kd, loss_bkl, loss_nbfkl = self._fpkd_fkl_loss(
+                log_probs, enc_len, batch["fkd_dense_probs"], batch["fkd_lens"])
+            loss = loss_ctc + loss_kd
+            self.log("train/fpkd_bkl", loss_bkl, on_step=True, on_epoch=True)
+            self.log("train/fpkd_nbfkl", loss_nbfkl, on_step=True, on_epoch=True)
+
+        elif self.kd_mode == "carl_feature":
+            loss_kd = self._feature_kd_loss(
+                enc_len, batch["carl_features"], batch["carl_teacher_frames"])
+            loss = loss_kd
+
+        elif self.kd_mode == "carl":
+            loss_be = self._carl_be_loss(
+                log_probs, enc_len, batch["fkd_dense_probs"], batch["fkd_lens"])
+            carl_lp = self._carl_projected_log_probs()
+            loss_carl_ctc = self.loss(
+                log_probs=carl_lp, targets=batch["tokens"], input_lengths=enc_len,
+                target_lengths=batch["token_lens"])
+            loss_carl_be = self._carl_be_loss(
+                carl_lp, enc_len, batch["fkd_dense_probs"], batch["fkd_lens"])
+            loss_kd = (self.carl_alpha * loss_be
+                       + self.carl_gamma * loss_carl_ctc
+                       + self.carl_lambda * loss_carl_be)
+            loss = loss_ctc + loss_kd
+            self.log("train/carl_be", loss_be, on_step=True, on_epoch=True)
+            self.log("train/carl_ctc", loss_carl_ctc, on_step=True, on_epoch=True)
+            self.log("train/carl_aux_be", loss_carl_be, on_step=True, on_epoch=True)
 
         elif self.kd_mode == "sctc":
             loss_kd = self._sctc_loss(
@@ -1312,6 +2098,20 @@ class TransitionKDModel(EncDecCTCModelBPE):
             if diag is not None:
                 for k, v in diag.items():
                     self.log(f"train/bd_{k}", v, on_step=True, on_epoch=True)
+
+        elif self.kd_mode == "free_emit":
+            margin = curriculum_margin(
+                int(self.current_epoch), self.free_emit_margin_start, self.free_emit_anneal_epochs)
+            loss_kd, diag = free_emit_loss(
+                log_probs, enc_len, batch["fe_starts"], batch["fe_ends"],
+                batch["fe_token_ids"], batch["fe_types"], batch["fe_num_targets"],
+                batch["fe_teacher_frames"], self.blank_id,
+                sub_weight=self.free_emit_sub_weight,
+                spread_weight=self.free_emit_spread_weight, margin=margin)
+            loss = self._mix(loss_ctc, loss_kd)
+            self.log("train/free_emit_margin", float(margin), on_step=False, on_epoch=True)
+            for k, v in diag.items():
+                self.log(f"train/free_emit_{k}", v, on_step=True, on_epoch=True)
 
         elif self.kd_mode == "combined":
             loss_logit = self._frame_logit_kd_loss(

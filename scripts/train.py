@@ -39,7 +39,11 @@ def main(cfg):
     if init_ckpt:
         logging.info(f"Initializing model weights from: {init_ckpt}")
         ckpt = torch.load(init_ckpt, map_location="cpu", weights_only=False)
-        missing, unexpected = model.load_state_dict(ckpt["state_dict"], strict=False)
+        # Lightning checkpoints wrap weights in ``state_dict`` while the
+        # ``model_weights.ckpt`` stored in a NeMo archive is already a plain
+        # state dict. Both paths are weights-only; optimizer/epoch state is ignored.
+        state_dict = ckpt.get("state_dict", ckpt)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
         if missing:
             logging.warning(f"  Missing keys: {missing}")
         if unexpected:
@@ -49,6 +53,10 @@ def main(cfg):
     trainer.fit(model)
 
     if test_ds is not None:
+        # exp_manager leaves trainer.ckpt_path pointing at the checkpoint used
+        # to resume fit(). save_last may replace that file during training, so
+        # testing the in-memory final model must not reopen the stale resume path.
+        trainer.ckpt_path = None
         model.setup_test_data(test_ds)
         trainer.test(model, dataloaders=model._test_dl)
 

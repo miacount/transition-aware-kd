@@ -1,0 +1,65 @@
+[NeMo I 2026-08-07 02:36:40 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo I 2026-08-07 02:36:40 nemo_logging:393] 
+    Replacing placeholder number of classes (-1) with actual number of classes - 1024
+[NeMo I 2026-08-07 02:36:40 nemo_logging:393] PADDING: 0
+model=lbs_crctc_stable_fair50
+checkpoint=nemo_experiments/cr_ctc_w02_fair50/2026-07-04_05-27-08/checkpoints/cr_ctc_w02_fair50--val_wer=0.1380-epoch=48.ckpt
+beam_width=16 beam_prune_logp=-10.0 token_min_logp=-5.0 workers=8
+
+[dev_clean]
+  progress utterances=320 elapsed=1.4s
+  progress utterances=640 elapsed=2.2s
+  progress utterances=960 elapsed=2.8s
+  progress utterances=1280 elapsed=3.7s
+  progress utterances=1600 elapsed=4.5s
+  progress utterances=1920 elapsed=5.2s
+  progress utterances=2240 elapsed=5.9s
+  progress utterances=2560 elapsed=6.5s
+utterances=2703 CTC_loss=17.5559
+greedy   WER=13.8414% INS=1.1489%(625) DEL=1.4411%(784) SUB=11.2514%(6121) REF_WORDS=54402
+beam     WER=13.2918% INS=1.1654%(634) DEL=1.3088%(712) SUB=10.8176%(5885) REF_WORDS=54402
+beam_minus_greedy_WER=-0.5496%p
+
+[dev_other]
+  progress utterances=320 elapsed=1.1s
+  progress utterances=640 elapsed=1.8s
+  progress utterances=960 elapsed=2.7s
+  progress utterances=1280 elapsed=3.3s
+  progress utterances=1600 elapsed=4.1s
+  progress utterances=1920 elapsed=5.0s
+  progress utterances=2240 elapsed=5.7s
+  progress utterances=2560 elapsed=6.4s
+  progress utterances=2864 elapsed=6.9s
+utterances=2864 CTC_loss=35.6199
+greedy   WER=30.9374% INS=2.4947%(1271) DEL=3.8804%(1977) SUB=24.5623%(12514) REF_WORDS=50948
+beam     WER=30.3918% INS=2.5732%(1311) DEL=3.6115%(1840) SUB=24.2070%(12333) REF_WORDS=50948
+beam_minus_greedy_WER=-0.5457%p
+
+[test_clean]
+  progress utterances=320 elapsed=1.1s
+  progress utterances=640 elapsed=1.9s
+  progress utterances=960 elapsed=2.6s
+  progress utterances=1280 elapsed=3.5s
+  progress utterances=1600 elapsed=4.5s
+  progress utterances=1920 elapsed=5.0s
+  progress utterances=2240 elapsed=5.8s
+  progress utterances=2560 elapsed=6.7s
+utterances=2620 CTC_loss=17.8358
+greedy   WER=14.0197% INS=1.2002%(631) DEL=1.4893%(783) SUB=11.3303%(5957) REF_WORDS=52576
+beam     WER=13.5005% INS=1.2135%(638) DEL=1.3752%(723) SUB=10.9118%(5737) REF_WORDS=52576
+beam_minus_greedy_WER=-0.5192%p
+
+[test_other]
+  progress utterances=320 elapsed=1.0s
+  progress utterances=640 elapsed=1.9s
+  progress utterances=960 elapsed=2.6s
+  progress utterances=1280 elapsed=3.4s
+  progress utterances=1600 elapsed=4.1s
+  progress utterances=1920 elapsed=4.9s
+  progress utterances=2240 elapsed=5.9s
+  progress utterances=2560 elapsed=6.5s
+  progress utterances=2880 elapsed=7.0s
+utterances=2939 CTC_loss=36.5150
+greedy   WER=31.8438% INS=2.4855%(1301) DEL=4.4094%(2308) SUB=24.9489%(13059) REF_WORDS=52343
+beam     WER=31.1847% INS=2.5142%(1316) DEL=4.0559%(2123) SUB=24.6146%(12884) REF_WORDS=52343
+beam_minus_greedy_WER=-0.6591%p

@@ -1,0 +1,489 @@
+name: student-citrinet-144-1024-chime3
+model:
+  sample_rate: 16000
+  log_prediction: false
+  ctc_reduction: mean_batch
+  seed: 1
+  kd_mode: none
+  kd_weight: 0.0
+  token_avg_kd_weight: 0.0
+  transition_kd_weight: 0.0
+  kd_lambda: null
+  logit_kd_reduction: frame_mean
+  logit_kd_temperature: 2.0
+  logit_kd_blank_mode: none
+  logit_kd_blank_n: 1
+  logit_kd_blank_threshold: 0.9
+  logit_kd_blank_beta: 0.5
+  logit_kd_occ_weight: 0.0
+  logit_kd_res_weight: 0.0
+  logit_kd_tab_size: 2
+  logit_kd_cross_pool: false
+  span_kd_gate_threshold: 0.3
+  span_kd_dual: false
+  span_kd_student_delta: 6.0
+  span_kd_emit_beta: 1.0
+  span_ntdk_weight: 0.0
+  span_shoulder_weight: 0.0
+  span_ntdk_reliability: false
+  span_ntdk_mass_weighted: false
+  span_ntdk_rel_min: 0.0001
+  span_ntdk_rel_max: 0.05
+  span_ntdk_rel_gt_min: 0.5
+  span_ntdk_rel_power: 0.5
+  span_primary_mode: legacy
+  span_kd_uniform_target: false
+  span_kd_cnw: false
+  span_kd_cnw_alpha: 1.0
+  span_kd_cnw_gamma: 1.0
+  span_kd_cnw_wmin: 0.2
+  span_kd_cnw_wmax: 5.0
+  span_kd_support_mode: gamma
+  span_kd_support_width: 0
+  span_kd_support_eps: 0.01
+  free_emit_sub_weight: 0.25
+  free_emit_spread_weight: 0.05
+  free_emit_margin_start: 0
+  free_emit_anneal_epochs: 70
+  boundary_kd_cell: 2
+  boundary_kd_weight_source: residual
+  boundary_kd_train_min: 0.0
+  kd_start_step: 0
+  skd_split_layer: 4
+  skd_alpha: 0.5
+  sr_ctc_weight: 0.0
+  label_prior_ctc_alpha: 0.0
+  label_prior_momentum: 0.99
+  cr_ctc_weight: 0.2
+  cr_ctc_time_mask_factor: 2.5
+  cr_ctc_warm_step: 2000
+  cr_ctc_time_masks_scale: null
+  cr_ctc_time_width_scale: null
+  frame_dkd_alpha: 1.0
+  frame_dkd_beta: 8.0
+  frame_dkd_temperature: 4.0
+  frame_dkd_warmup_epochs: 20
+  fpkd_temperature: 1.0
+  fpkd_bkl_weight: 1.0
+  fpkd_nbf_weight: 1.0
+  carl_teacher_dim: 640
+  carl_classifier_path: ''
+  carl_temperature: 1.0
+  carl_alpha: 1.0
+  carl_gamma: 1.0
+  carl_lambda: 1.0
+  train_ds:
+    manifest_filepath: data/chime3_train_enhanced.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: true
+    num_workers: 8
+    pin_memory: true
+  validation_ds:
+    manifest_filepath: data/chime3_dev_enhanced.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    num_workers: 8
+    pin_memory: true
+  test_ds:
+  - name: chime3_dev_real
+    manifest_filepath: data/chime3_dev_real_enhanced.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    num_workers: 8
+    pin_memory: true
+  - name: chime3_dev_simu
+    manifest_filepath: data/chime3_dev_simu_enhanced.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    num_workers: 8
+    pin_memory: true
+  - name: chime3_eval_real
+    manifest_filepath: data/chime3_eval_real_enhanced.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    num_workers: 8
+    pin_memory: true
+  - name: chime3_eval_simu
+    manifest_filepath: data/chime3_eval_simu_enhanced.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    num_workers: 8
+    pin_memory: true
+  tokenizer:
+    dir: tokenizer_citrinet_1024
+    type: bpe
+  preprocessor:
+    _target_: nemo.collections.asr.modules.AudioToMelSpectrogramPreprocessor
+    sample_rate: 16000
+    normalize: per_feature
+    window_size: 0.025
+    window_stride: 0.01
+    features: 80
+    n_fft: 512
+    pad_to: 16
+    dither: 1.0e-05
+    window: hann
+  spec_augment:
+    _target_: nemo.collections.asr.modules.SpectrogramAugmentation
+    freq_masks: 2
+    time_masks: 2
+    freq_width: 27
+    time_width: 0.05
+  encoder:
+    _target_: nemo.collections.asr.modules.ConvASREncoder
+    feat_in: 80
+    activation: relu
+    conv_mask: true
+    jasper:
+    - filters: 144
+      repeat: 1
+      kernel:
+      - 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: false
+      separable: true
+      se: true
+      se_context_size: -1
+    - filters: 144
+      repeat: 5
+      stride:
+      - 2
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      stride_last: true
+      residual_mode: stride_add
+      kernel:
+      - 11
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 13
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 15
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 17
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 19
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 21
+    - filters: 144
+      repeat: 5
+      stride:
+      - 2
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      stride_last: true
+      residual_mode: stride_add
+      kernel:
+      - 13
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 15
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 17
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 19
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 21
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 23
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 25
+    - filters: 144
+      repeat: 5
+      stride:
+      - 2
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      stride_last: true
+      residual_mode: stride_add
+      kernel:
+      - 25
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 27
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 29
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 31
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 33
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 35
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 37
+    - filters: 144
+      repeat: 5
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: true
+      separable: true
+      se: true
+      se_context_size: -1
+      kernel:
+      - 39
+    - filters: 360
+      repeat: 1
+      kernel:
+      - 41
+      stride:
+      - 1
+      dilation:
+      - 1
+      dropout: 0.0
+      residual: false
+      separable: true
+      se: true
+      se_context_size: -1
+  decoder:
+    _target_: nemo.collections.asr.modules.ConvASRDecoder
+    feat_in: 360
+    num_classes: -1
+    vocabulary: []
+  optim:
+    name: novograd
+    lr: 0.05
+    betas:
+    - 0.8
+    - 0.25
+    weight_decay: 0.001
+    sched:
+      name: CosineAnnealing
+      warmup_steps: 300
+      min_lr: 1.0e-05
+trainer:
+  devices: 1
+  accelerator: gpu
+  max_epochs: 100
+  precision: bf16-mixed
+  log_every_n_steps: 50
+  val_check_interval: 1.0
+  enable_checkpointing: false
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 2
+exp_manager:
+  exp_dir: nemo_experiments
+  name: student-citrinet-256-1024-chime3
+  create_wandb_logger: true
+  wandb_logger_kwargs:
+    project: transition-aware-kd-chime3
+    name: student-citrinet-256-1024-chime3
+  create_checkpoint_callback: true
+  checkpoint_callback_params:
+    monitor: val_wer
+    mode: min
+    save_top_k: 3
+    save_last: true
+  resume_if_exists: false
+  resume_ignore_no_checkpoint: true

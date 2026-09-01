@@ -67,6 +67,13 @@ def run_teacher(model, wav_np, device):
     return log_probs[0, :frames].detach().cpu().float().numpy()
 
 
+def load_ctc_teacher(nemo_asr, source):
+    """Load either a NeMo registry model name or an exported .nemo model."""
+    if source.endswith(".nemo"):
+        return nemo_asr.models.EncDecCTCModelBPE.restore_from(source)
+    return nemo_asr.models.EncDecCTCModelBPE.from_pretrained(source)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest-in", required=True)
@@ -74,6 +81,8 @@ def main():
     ap.add_argument("--teacher", default="stt_en_conformer_ctc_small")
     ap.add_argument("--tokenizer", default="tokenizer_1024")
     ap.add_argument("--out-dir", default="data/sctc")
+    ap.add_argument("--reuse-frame-posterior", action="store_true",
+                    help="reuse a T=1 dense posterior referenced by teacher_frame_kd_path")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--resume", action="store_true", help="reuse existing per-utterance .pt targets")
     ap.add_argument("--flush-every", type=int, default=100)
@@ -87,7 +96,7 @@ def main():
     if args.limit:
         rows = rows[:args.limit]
 
-    teacher = nemo_asr.models.EncDecCTCModelBPE.from_pretrained(args.teacher).to(args.device).eval()
+    teacher = load_ctc_teacher(nemo_asr, args.teacher).to(args.device).eval()
     teacher.freeze()
     blank = int(teacher.decoder.num_classes_with_blank - 1)
     sample_rate = int(teacher.cfg.preprocessor.sample_rate)
@@ -96,6 +105,22 @@ def main():
     manifest_dir = Path(args.manifest_out).parent
     out_dir = Path(args.out_dir)
     (manifest_dir / out_dir.name).mkdir(parents=True, exist_ok=True)
+
+    def load_cached_teacher_lp(row):
+        rel_path = row.get("teacher_frame_kd_path")
+        if not rel_path:
+            raise ValueError("--reuse-frame-posterior requires teacher_frame_kd_path on every row")
+        cache_path = Path(rel_path)
+        if not cache_path.is_absolute():
+            cache_path = Path(args.manifest_in).parent / cache_path
+        cached = torch.load(cache_path, map_location="cpu", weights_only=False)
+        if "dense_probs" not in cached:
+            raise ValueError(f"not a dense posterior cache: {cache_path}")
+        if abs(float(cached.get("temperature", 1.0)) - 1.0) > 1e-6:
+            raise ValueError(f"expected T=1 dense posterior: {cache_path}")
+        probs = cached["dense_probs"].float().numpy().astype(np.float64)
+        probs /= np.maximum(probs.sum(axis=-1, keepdims=True), 1e-300)
+        return np.log(np.clip(probs, 1e-300, None))
 
     kept = 0
     reused = 0
@@ -123,8 +148,11 @@ def main():
             except Exception as exc:
                 print(f"[warn] failed to reuse {out_path}: {exc}; rebuilding", flush=True)
 
-        wav = load_audio(row["audio_filepath"], sample_rate)
-        teacher_lp = run_teacher(teacher, wav, args.device)              # (T, V)
+        if args.reuse_frame_posterior:
+            teacher_lp = load_cached_teacher_lp(row)
+        else:
+            wav = load_audio(row["audio_filepath"], sample_rate)
+            teacher_lp = run_teacher(teacher, wav, args.device)              # (T, V)
         fb = ctc_forward_backward(teacher_lp, bpe_ids, blank)
         token_gamma = fb["token_gamma"]                                  # (T, N) transcript-constrained occupancy
 

@@ -1,115 +1,79 @@
-# Transition-aware KD for CTC ASR
+# Mass3 + NTDK for CTC ASR
 
-Clean experimental pipeline for LibriSpeech CTC student distillation.
+Paper code for occurrence-aware hierarchical knowledge distillation in CTC ASR.
+The frozen method uses blank-suppressed forward-backward occupancy for temporal
+support and distills raw teacher posteriors with Mass3 and conditional NTDK.
 
-## Current Scope
+## Frozen method
 
-Teacher:
+- Teacher support: blank penalty `delta=6`
+- Mass3: blank / ground-truth / non-target mass, weight `25`
+- NTDK: conditional non-target distribution, top-M cache `M=32`, weight `8`
+- Student: Conformer-CTC, 8 layers, d_model 144, 1024 BPE, 4x subsampling
 
-```text
-stt_en_conformer_ctc_small
-1024 BPE + blank, 4x subsampling
-```
+The detailed method and evidence are in
+[`analysis/PAPER_STORYLINE_AND_METHOD.md`](analysis/PAPER_STORYLINE_AND_METHOD.md)
+and [`analysis/VALIDATION_FIGURES.md`](analysis/VALIDATION_FIGURES.md).
 
-Student:
+## Repository layout
 
-```text
-Conformer CTC
-1024 BPE + blank
-d_model=144, layers=8, heads=4, 4x subsampling
-```
+- `src/`: training model, data pipeline, CTC forward-backward, KD losses
+- `scripts/`: data preparation, target building, training, evaluation, validation
+- `experiments/`: reproducible LibriSpeech, TED-LIUM2, and TED-LIUM3 entrypoints
+- `configs/`: dataset-specific student and adapted-teacher configs
+- `analysis/`: paper tables, final decoding outputs, and validation artifacts
+- `figures/`: paper-ready figures
+- `data/`, `nemo_experiments/`: local datasets, targets, checkpoints (Git-ignored)
 
-Official evaluation splits:
+## Reproduction
 
-```text
-dev_clean, dev_other, test_clean, test_other
-```
-
-Official WER is corpus-level WER from `scripts/evaluate_student.py` or epoch-level `val/wer` after the cleanup.
-
-## Preserved Data
-
-Expected manifests:
-
-```text
-data/train_clean_100.json
-data/dev_clean.json
-data/dev_other.json
-data/test_clean.json
-data/test_other.json
-```
-
-Download/rebuild eval manifests:
+LibriSpeech-100 and TED-LIUM3 main suite:
 
 ```bash
-python scripts/prepare_librispeech_eval.py \
-  --splits dev-clean dev-other test-clean test-other
+bash experiments/run_paper_main_all.sh
 ```
 
-## Experiments
-
-All experiment entrypoints live under `experiments/`. Common runners accept args; presets only call runners.
-
-No-KD baseline:
+TED-LIUM3 with a domain-adapted teacher:
 
 ```bash
-bash experiments/presets/00_no_kd.sh
+bash experiments/prepare_ted3_adapted_teacher_targets.sh
+bash experiments/run_paper_main_ted3_adapted_teacher.sh
 ```
 
-Transition KD:
+TED-LIUM2 pilot (teacher fine-tuning, No-KD, and ours only):
 
 ```bash
-bash experiments/presets/10_build_transition_targets.sh
-bash experiments/presets/11_transition_kd_w025.sh
+bash experiments/run_ted2_pilot_all.sh
 ```
 
-Vanilla frame logit KD:
+The TED-LIUM manifests use the same Kaldi-style normalization for teacher,
+student, and evaluation. STM ignore segments are excluded during preparation.
+
+Evaluate saved checkpoints and rebuild the paper table:
 
 ```bash
-bash experiments/presets/20_build_frame_topk_targets.sh
-bash experiments/presets/21_vanilla_logit_kd_w01.sh
+bash experiments/evaluate_paper_main.sh lbs
+bash experiments/evaluate_paper_main.sh ted2
+bash experiments/evaluate_paper_main.sh ted3
+python scripts/summarize_paper_main.py --beam-width 16
 ```
 
-Generic training:
+## Monitoring
 
 ```bash
-bash experiments/train.sh \
-  --name my-run \
-  --manifest data/train_clean_100.json \
-  --kd-mode none
+watch -n 5 'ps -eo etime,cmd | grep -E "build_kd_targets|build_span_kd_targets|scripts/train.py" | grep -v grep'
+tail -F nemo_experiments/<run>/<timestamp>/lightning_logs/version_0/metrics.csv
 ```
 
-## Evaluation
+TED-LIUM2 pilot runs log to the W&B project
+`transition-aware-kd-ted2-pilot`. Checkpoints and generated targets remain local
+under `nemo_experiments/` and `data/`; they are intentionally not committed.
 
-Find checkpoints:
+## Validation
+
+Protocol tests are under `tests/`. Before committing:
 
 ```bash
-find nemo_experiments -type f -name "*.ckpt"
+python -m pytest -q tests
+find experiments -name "*.sh" -print0 | xargs -0 -n1 bash -n
 ```
-
-Evaluate a checkpoint:
-
-```bash
-bash experiments/eval.sh --ckpt path/to/checkpoint.ckpt --name my-run
-```
-
-CTC path mismatch diagnostic:
-
-```bash
-bash experiments/diagnose.sh --ckpt path/to/checkpoint.ckpt --name my-run --limit 256
-```
-
-## Logging Policy
-
-W&B/TensorBoard should be interpreted through these metrics only:
-
-```text
-train/loss
-train/ctc_loss
-train/kd_loss
-val/loss
-val/wer
-val_wer    # checkpoint monitor alias
-```
-
-Prediction sample logging is disabled in the base config.

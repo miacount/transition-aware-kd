@@ -1,0 +1,49 @@
+method,dataset,split,decoder,wer_percent,log
+No KD,lbs,dev_clean,greedy,14.9020,analysis/beam16_paper_lbs_nokd.txt
+No KD,lbs,dev_other,greedy,33.5401,analysis/beam16_paper_lbs_nokd.txt
+No KD,lbs,test_clean,greedy,15.2351,analysis/beam16_paper_lbs_nokd.txt
+No KD,lbs,test_other,greedy,34.2606,analysis/beam16_paper_lbs_nokd.txt
+No KD,lbs,test_clean,beam,14.9821,analysis/beam16_paper_lbs_nokd.txt
+No KD,lbs,test_other,beam,34.1440,analysis/beam16_paper_lbs_nokd.txt
+Vanilla frame KD <sup>[1]</sup>,lbs,dev_clean,greedy,13.0969,analysis/beam16_paper_lbs_vanilla_full_l025.txt
+Vanilla frame KD <sup>[1]</sup>,lbs,dev_other,greedy,30.2426,analysis/beam16_paper_lbs_vanilla_full_l025.txt
+Vanilla frame KD <sup>[1]</sup>,lbs,test_clean,greedy,13.2323,analysis/beam16_paper_lbs_vanilla_full_l025.txt
+Vanilla frame KD <sup>[1]</sup>,lbs,test_other,greedy,31.4120,analysis/beam16_paper_lbs_vanilla_full_l025.txt
+Vanilla frame KD <sup>[1]</sup>,lbs,test_clean,beam,12.6712,analysis/beam16_paper_lbs_vanilla_full_l025.txt
+Vanilla frame KD <sup>[1]</sup>,lbs,test_other,beam,30.7606,analysis/beam16_paper_lbs_vanilla_full_l025.txt
+Blank elimination KD <sup>[2]</sup>,lbs,dev_clean,greedy,12.4205,analysis/beam16_paper_lbs_kdbe_full_l025.txt
+Blank elimination KD <sup>[2]</sup>,lbs,dev_other,greedy,29.9521,analysis/beam16_paper_lbs_kdbe_full_l025.txt
+Blank elimination KD <sup>[2]</sup>,lbs,test_clean,greedy,12.8271,analysis/beam16_paper_lbs_kdbe_full_l025.txt
+Blank elimination KD <sup>[2]</sup>,lbs,test_other,greedy,30.8274,analysis/beam16_paper_lbs_kdbe_full_l025.txt
+Blank elimination KD <sup>[2]</sup>,lbs,test_clean,beam,12.5285,analysis/beam16_paper_lbs_kdbe_full_l025.txt
+Blank elimination KD <sup>[2]</sup>,lbs,test_other,beam,30.5103,analysis/beam16_paper_lbs_kdbe_full_l025.txt
+Symmetric selection KD <sup>[3]</sup>,lbs,dev_clean,greedy,13.0859,analysis/beam16_paper_lbs_symmetric_full_l025_n4.txt
+Symmetric selection KD <sup>[3]</sup>,lbs,dev_other,greedy,30.7058,analysis/beam16_paper_lbs_symmetric_full_l025_n4.txt
+Symmetric selection KD <sup>[3]</sup>,lbs,test_clean,greedy,13.4738,analysis/beam16_paper_lbs_symmetric_full_l025_n4.txt
+Symmetric selection KD <sup>[3]</sup>,lbs,test_other,greedy,31.6489,analysis/beam16_paper_lbs_symmetric_full_l025_n4.txt
+Symmetric selection KD <sup>[3]</sup>,lbs,test_clean,beam,12.8861,analysis/beam16_paper_lbs_symmetric_full_l025_n4.txt
+Symmetric selection KD <sup>[3]</sup>,lbs,test_other,beam,30.8943,analysis/beam16_paper_lbs_symmetric_full_l025_n4.txt
+Guided CTC <sup>[4]</sup>,lbs,dev_clean,greedy,13.2385,analysis/beam16_paper_lbs_guided_exact.txt
+Guided CTC <sup>[4]</sup>,lbs,dev_other,greedy,31.4870,analysis/beam16_paper_lbs_guided_exact.txt
+Guided CTC <sup>[4]</sup>,lbs,test_clean,greedy,13.4643,analysis/beam16_paper_lbs_guided_exact.txt
+Guided CTC <sup>[4]</sup>,lbs,test_other,greedy,31.8591,analysis/beam16_paper_lbs_guided_exact.txt
+Guided CTC <sup>[4]</sup>,lbs,test_clean,beam,13.1657,analysis/beam16_paper_lbs_guided_exact.txt
+Guided CTC <sup>[4]</sup>,lbs,test_other,beam,31.5687,analysis/beam16_paper_lbs_guided_exact.txt
+S-CTC + CTC fine-tune <sup>[5]</sup>,lbs,dev_clean,greedy,14.3432,analysis/beam16_paper_lbs_sctc_ft.txt
+S-CTC + CTC fine-tune <sup>[5]</sup>,lbs,dev_other,greedy,32.3565,analysis/beam16_paper_lbs_sctc_ft.txt
+S-CTC + CTC fine-tune <sup>[5]</sup>,lbs,test_clean,greedy,14.5447,analysis/beam16_paper_lbs_sctc_ft.txt
+S-CTC + CTC fine-tune <sup>[5]</sup>,lbs,test_other,greedy,32.9767,analysis/beam16_paper_lbs_sctc_ft.txt
+S-CTC + CTC fine-tune <sup>[5]</sup>,lbs,test_clean,beam,14.4343,analysis/beam16_paper_lbs_sctc_ft.txt
+S-CTC + CTC fine-tune <sup>[5]</sup>,lbs,test_other,beam,32.7914,analysis/beam16_paper_lbs_sctc_ft.txt
+CR-CTC <sup>[6]</sup>,lbs,dev_clean,greedy,13.8414,analysis/beam16_paper_lbs_crctc_stable_fair50.txt
+CR-CTC <sup>[6]</sup>,lbs,dev_other,greedy,30.9374,analysis/beam16_paper_lbs_crctc_stable_fair50.txt
+CR-CTC <sup>[6]</sup>,lbs,test_clean,greedy,14.0197,analysis/beam16_paper_lbs_crctc_stable_fair50.txt
+CR-CTC <sup>[6]</sup>,lbs,test_other,greedy,31.8438,analysis/beam16_paper_lbs_crctc_stable_fair50.txt
+CR-CTC <sup>[6]</sup>,lbs,test_clean,beam,13.5005,analysis/beam16_paper_lbs_crctc_stable_fair50.txt
+CR-CTC <sup>[6]</sup>,lbs,test_other,beam,31.1847,analysis/beam16_paper_lbs_crctc_stable_fair50.txt
+Mass3 + NTDK (ours) <sup>[7]</sup>,lbs,dev_clean,greedy,11.9168,analysis/beam16_paper_lbs_mass25_ntdk8.txt
+Mass3 + NTDK (ours) <sup>[7]</sup>,lbs,dev_other,greedy,29.4359,analysis/beam16_paper_lbs_mass25_ntdk8.txt
+Mass3 + NTDK (ours) <sup>[7]</sup>,lbs,test_clean,greedy,12.3440,analysis/beam16_paper_lbs_mass25_ntdk8.txt
+Mass3 + NTDK (ours) <sup>[7]</sup>,lbs,test_other,greedy,30.1435,analysis/beam16_paper_lbs_mass25_ntdk8.txt
+Mass3 + NTDK (ours) <sup>[7]</sup>,lbs,test_clean,beam,12.0454,analysis/beam16_paper_lbs_mass25_ntdk8.txt
+Mass3 + NTDK (ours) <sup>[7]</sup>,lbs,test_other,beam,29.7270,analysis/beam16_paper_lbs_mass25_ntdk8.txt

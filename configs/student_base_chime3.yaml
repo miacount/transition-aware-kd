@@ -1,0 +1,64 @@
+defaults:
+  - student_base_ted3
+  - _self_
+
+name: student-conformer-144x8-1024-chime3
+
+model:
+  train_ds:
+    manifest_filepath: data/chime3_train_enhanced.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: true
+    num_workers: 8
+    pin_memory: true
+
+  validation_ds:
+    manifest_filepath: data/chime3_dev_enhanced.json
+    sample_rate: 16000
+    batch_size: 32
+    shuffle: false
+    num_workers: 8
+    pin_memory: true
+
+  test_ds:
+    - name: chime3_dev_real
+      manifest_filepath: data/chime3_dev_real_enhanced.json
+      sample_rate: 16000
+      batch_size: 32
+      shuffle: false
+      num_workers: 8
+      pin_memory: true
+    - name: chime3_dev_simu
+      manifest_filepath: data/chime3_dev_simu_enhanced.json
+      sample_rate: 16000
+      batch_size: 32
+      shuffle: false
+      num_workers: 8
+      pin_memory: true
+    - name: chime3_eval_real
+      manifest_filepath: data/chime3_eval_real_enhanced.json
+      sample_rate: 16000
+      batch_size: 32
+      shuffle: false
+      num_workers: 8
+      pin_memory: true
+    - name: chime3_eval_simu
+      manifest_filepath: data/chime3_eval_simu_enhanced.json
+      sample_rate: 16000
+      batch_size: 32
+      shuffle: false
+      num_workers: 8
+      pin_memory: true
+
+  optim:
+    sched:
+      # 8,738 utterances / effective batch 64 ~= 137 updates/epoch.
+      # Keep the established ~5.5-epoch Noam warm-up fraction.
+      warmup_steps: 750
+
+exp_manager:
+  name: student-conformer-144x8-1024-chime3
+  wandb_logger_kwargs:
+    project: transition-aware-kd-chime3
+    name: student-conformer-144x8-1024-chime3

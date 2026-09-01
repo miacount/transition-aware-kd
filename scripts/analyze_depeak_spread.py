@@ -59,7 +59,7 @@ def map_to_len(path, length):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", default="data/tedlium_test.json")
-    ap.add_argument("--config", default="configs/student_base_ted.yaml")
+    ap.add_argument("--config", default="configs/student_base_ted3.yaml")
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--teacher", default="stt_en_conformer_ctc_small")
     ap.add_argument("--sample_rate", type=int, default=16000)

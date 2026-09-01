@@ -1,0 +1,54 @@
+[NeMo W 2026-08-19 05:21:15 nemo_logging:405] /usr/local/lib/python3.12/dist-packages/pydub/utils.py:170: RuntimeWarning: Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work
+      warn("Couldn't find ffmpeg or avconv - defaulting to ffmpeg, but may not work", RuntimeWarning)
+    
+[NeMo I 2026-08-19 05:21:15 nemo_logging:393] Tokenizer SentencePieceTokenizer initialized with 1024 tokens
+[NeMo I 2026-08-19 05:21:15 nemo_logging:393] 
+    Replacing placeholder number of classes (-1) with actual number of classes - 1024
+[NeMo I 2026-08-19 05:21:15 nemo_logging:393] PADDING: 0
+kenlm python bindings are not installed. Most likely you want to install it using: pip install https://github.com/kpu/kenlm/archive/master.zip
+kenlm python bindings are not installed. Most likely you want to install it using: pip install https://github.com/kpu/kenlm/archive/master.zip
+model=chime3_lr05_nokd
+checkpoint=nemo_experiments/paper-chime3-lr05-no-kd-s1/2026-08-14_06-45-46/checkpoints/paper-chime3-lr05-no-kd-s1--val_wer=0.3687-epoch=98.ckpt
+beam_width=16 beam_prune_logp=-10.0 token_min_logp=-5.0 workers=8
+
+[chime3_dev_real]
+  progress utterances=320 elapsed=0.9s
+  progress utterances=640 elapsed=1.3s
+  progress utterances=960 elapsed=1.7s
+  progress utterances=1280 elapsed=2.1s
+  progress utterances=1600 elapsed=2.6s
+utterances=1640 CTC_loss=46.9527
+greedy   WER=41.4188% INS=2.6829%(728) DEL=7.5917%(2060) SUB=31.1443%(8451) REF_WORDS=27135
+beam     WER=41.1498% INS=2.6939%(731) DEL=7.3595%(1997) SUB=31.0964%(8438) REF_WORDS=27135
+beam_minus_greedy_WER=-0.2690%p
+
+[chime3_dev_simu]
+  progress utterances=320 elapsed=0.6s
+  progress utterances=640 elapsed=0.9s
+  progress utterances=960 elapsed=1.3s
+  progress utterances=1280 elapsed=1.7s
+  progress utterances=1600 elapsed=2.0s
+utterances=1640 CTC_loss=33.3311
+greedy   WER=32.2339% INS=2.4543%(666) DEL=4.0647%(1103) SUB=25.7149%(6978) REF_WORDS=27136
+beam     WER=31.8912% INS=2.4727%(671) DEL=3.9468%(1071) SUB=25.4717%(6912) REF_WORDS=27136
+beam_minus_greedy_WER=-0.3427%p
+
+[chime3_eval_real]
+  progress utterances=320 elapsed=0.6s
+  progress utterances=640 elapsed=1.1s
+  progress utterances=960 elapsed=1.6s
+  progress utterances=1280 elapsed=2.1s
+utterances=1320 CTC_loss=64.3761
+greedy   WER=52.4775% INS=3.6847%(789) DEL=9.7838%(2095) SUB=39.0090%(8353) REF_WORDS=21413
+beam     WER=52.1833% INS=3.7501%(803) DEL=9.5082%(2036) SUB=38.9250%(8335) REF_WORDS=21413
+beam_minus_greedy_WER=-0.2942%p
+
+[chime3_eval_simu]
+  progress utterances=320 elapsed=0.6s
+  progress utterances=640 elapsed=1.0s
+  progress utterances=960 elapsed=1.4s
+  progress utterances=1280 elapsed=1.7s
+utterances=1320 CTC_loss=38.1692
+greedy   WER=35.5742% INS=3.3333%(714) DEL=3.6508%(782) SUB=28.5901%(6124) REF_WORDS=21420
+beam     WER=35.1167% INS=3.2726%(701) DEL=3.5854%(768) SUB=28.2586%(6053) REF_WORDS=21420
+beam_minus_greedy_WER=-0.4575%p
